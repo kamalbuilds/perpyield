@@ -13,7 +13,7 @@
     }
   },
   "created_at": 0,
-  "updated_at": 1776181907595,
+  "updated_at": 1776193097234,
   "is_active": false,
   "strategy_id": "momentum_swing",
   "strategy_config": {},
@@ -61,6 +61,18 @@
     },
     {
       "timestamp": 1776181907595,
+      "vault_value": 100.0,
+      "net_pnl": 0.0,
+      "pnl_pct": 0.0
+    },
+    {
+      "timestamp": 1776193051287,
+      "vault_value": 100.0,
+      "net_pnl": 0.0,
+      "pnl_pct": 0.0
+    },
+    {
+      "timestamp": 1776193097234,
       "vault_value": 100.0,
       "net_pnl": 0.0,
       "pnl_pct": 0.0

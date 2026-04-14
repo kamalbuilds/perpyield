@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from pacifica.client import PacificaClient, sf
-from strategy.vault_manager import STRATEGY_REGISTRY, get_strategy_class
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +15,7 @@ class PortfolioConfig:
     rebalance_interval_seconds: float = 3600.0
 
     def validate(self) -> list[str]:
+        from strategy.vault_manager import STRATEGY_REGISTRY
         errors = []
         for sid, pct in self.allocations.items():
             if sid not in STRATEGY_REGISTRY:
@@ -58,6 +58,7 @@ class PortfolioManager:
         self.combined_pnl_history: list[dict] = []
 
         for strategy_id, pct in config.allocations.items():
+            from strategy.vault_manager import get_strategy_class
             strategy_class, config_class = get_strategy_class(strategy_id)
             if strategy_class is None:
                 logger.warning(f"Skipping unknown strategy {strategy_id} in portfolio")
@@ -294,6 +295,7 @@ class PortfolioManager:
         }
 
     def update_allocations(self, new_allocations: dict[str, float]) -> list[str]:
+        from strategy.vault_manager import STRATEGY_REGISTRY, get_strategy_class
         errors = []
         for sid in new_allocations:
             if sid not in STRATEGY_REGISTRY:

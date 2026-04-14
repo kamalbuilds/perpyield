@@ -270,6 +270,71 @@ perpyield/
     └── public/
 ```
 
+## Deployment
+
+### Railway (Backend)
+
+The backend deploys to Railway using the Dockerfile at `docker/Dockerfile`.
+
+1. Push the repo to GitHub
+2. Create a new Railway project, select the repo
+3. Railway reads `railway.json` for build and health check config
+4. Set environment variables in Railway dashboard:
+   - `PACIFICA_PRIVATE_KEY` (required)
+   - `PACIFICA_PUBLIC_KEY` (required)
+   - `PACIFICA_TESTNET=true`
+   - `CORS_ORIGINS=https://your-frontend.vercel.app`
+5. Generate a public domain and verify: `curl https://your-app.railway.app/api/health`
+
+### Vercel (Frontend)
+
+The frontend deploys to Vercel as a Next.js app.
+
+1. Import the GitHub repo in Vercel
+2. Set root directory to `frontend`
+3. Set environment variable: `NEXT_PUBLIC_API_URL=https://your-app.railway.app`
+4. Vercel reads `vercel.json` for build commands and security headers
+5. After deploy, update `CORS_ORIGINS` in Railway with the Vercel domain
+
+### CI/CD (GitHub Actions)
+
+Push to `main` triggers the workflow in `.github/workflows/deploy.yml`:
+
+1. **Test**: Backend tests + frontend typecheck/lint/build
+2. **Deploy Backend**: Railway CLI deploys on main push
+3. **Deploy Frontend**: Vercel CLI deploys on main push
+
+Required GitHub secrets: `RAILWAY_TOKEN`, `VERCEL_TOKEN`
+
+### Docker Compose (Local Production)
+
+```bash
+cp backend/.env.example backend/.env
+# Edit backend/.env with your Pacifica credentials
+docker compose up --build
+# Backend: http://localhost:8000 | Frontend: http://localhost:3000
+```
+
+### Environment Variables
+
+**Backend** (`backend/.env`):
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PACIFICA_PRIVATE_KEY` | Yes | Base58 Solana private key |
+| `PACIFICA_PUBLIC_KEY` | Yes | Solana public key |
+| `PACIFICA_TESTNET` | Yes | `true` for testnet |
+| `CORS_ORIGINS` | No | Allowed origins (default `*`) |
+| `REBALANCE_INTERVAL` | No | Seconds between rebalance checks (default 300) |
+| `MAX_LEVERAGE` | No | Maximum leverage (default 3) |
+| `DELTA_THRESHOLD` | No | Delta drift % before rebalance (default 5.0) |
+
+**Frontend**:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `NEXT_PUBLIC_API_URL` | Yes | Backend API URL |
+
 ## Built for Pacifica Hackathon
 
 Built for the Pacifica Hackathon, April 2026. Submitted under the **DeFi Composability** track as part of the $15K prize pool. Deadline: April 16, 2026.

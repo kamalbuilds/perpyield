@@ -161,8 +161,8 @@ def _enrich_featured_vaults() -> list[dict]:
 
 @router.get("/api/leaderboard/vaults")
 async def vault_leaderboard(
-    period: str = Query(default="7d", regex="^(7d|30d|all)$"),
-    sort_by: str = Query(default="return", regex="^(return|sharpe|tvl|clones)$"),
+    period: str = Query(default="7d", pattern="^(7d|30d|all)$"),
+    sort_by: str = Query(default="return", pattern="^(return|sharpe|tvl|clones)$"),
 ):
     vaults = _enrich_featured_vaults()
 
