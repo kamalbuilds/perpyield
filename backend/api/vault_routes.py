@@ -40,6 +40,11 @@ class CloneVaultRequest(BaseModel):
     custom_description: Optional[str] = None
 
 
+class PortfolioConfigureRequest(BaseModel):
+    allocations: dict[str, float]
+    rebalance_threshold: float = 0.05
+
+
 # ========== Vault Management ==========
 
 @router.get("/api/vault/status")
@@ -331,5 +336,45 @@ async def vault_performance(days: int = 30):
             "performance_history": history,
             "data_points": len(history),
         }
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ========== Portfolio Mode ==========
+
+@router.post("/api/vault/portfolio/configure")
+async def portfolio_configure(req: PortfolioConfigureRequest):
+    """Configure portfolio mode with strategy allocations."""
+    try:
+        vm = _get_vault_manager()
+        result = await vm.configure_portfolio(
+            allocations=req.allocations,
+            rebalance_threshold=req.rebalance_threshold,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.get("/api/vault/portfolio/status")
+async def portfolio_status():
+    """Get portfolio status with per-strategy breakdown and drift."""
+    try:
+        vm = _get_vault_manager()
+        return await vm.get_portfolio_status()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/api/vault/portfolio/rebalance")
+async def portfolio_rebalance():
+    """Rebalance portfolio positions to match target allocations."""
+    try:
+        vm = _get_vault_manager()
+        return await vm.rebalance_portfolio()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))

@@ -11,6 +11,8 @@ from strategy.momentum_swing import MomentumSwingStrategy, MomentumConfig
 from strategy.mean_reversion import MeanReversionStrategy, MeanReversionConfig
 from strategy.volatility_breakout import VolatilityBreakoutStrategy, VolatilityBreakoutConfig
 from strategy.rebalancer import Rebalancer, RebalanceConfig
+from strategy.portfolio_manager import PortfolioManager, PortfolioConfig
+from strategy.risk_manager import RiskManager, RiskConfig, RiskLevel
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +118,9 @@ class VaultState:
     description: Optional[str] = None
     performance_history: list = field(default_factory=list)
     social_stats: dict = field(default_factory=dict)
+    portfolio_mode: bool = False
+    portfolio_allocations: dict[str, float] = field(default_factory=dict)
+    per_strategy_performance: dict[str, dict] = field(default_factory=dict)
 
 
 class VaultManager:
@@ -136,6 +141,7 @@ class VaultManager:
         state_dir: str = "data",
         strategy_config: Optional[StrategyConfig] = None,
         rebalance_config: Optional[RebalanceConfig] = None,
+        risk_config: Optional[RiskConfig] = None,
     ):
         self.client = client
         self.vault_id = vault_id
@@ -146,9 +152,18 @@ class VaultManager:
 
         self.state = self._load_state()
 
-        # Initialize strategy based on stored preference
         self.strategy = self._init_strategy()
         self.rebalancer = Rebalancer(client, rebalance_config)
+        self.risk_manager = RiskManager(risk_config, state_dir=str(self.state_dir))
+
+        self.portfolio_manager: Optional[PortfolioManager] = None
+        if self.state.portfolio_mode and self.state.portfolio_allocations:
+            portfolio_config = PortfolioConfig(allocations=self.state.portfolio_allocations)
+            self.portfolio_manager = PortfolioManager(
+                client, portfolio_config, total_capital=self.state.total_deposited
+            )
+
+        self._sync_risk_positions()
 
     def _init_strategy(self):
         """Initialize strategy based on vault's strategy_id."""
@@ -167,6 +182,10 @@ class VaultManager:
 
         logger.info(f"Initialized {strategy_id} strategy for vault {self.vault_id}")
         return strategy_class(self.client, config)
+
+    def _sync_risk_positions(self):
+        if hasattr(self.strategy, 'active_positions'):
+            self.risk_manager.update_positions(self.strategy.active_positions)
 
     def _load_state(self) -> VaultState:
         if self.state_file.exists():
@@ -193,6 +212,9 @@ class VaultManager:
                 description=raw.get("description"),
                 performance_history=raw.get("performance_history", []),
                 social_stats=raw.get("social_stats", {}),
+                portfolio_mode=raw.get("portfolio_mode", False),
+                portfolio_allocations=raw.get("portfolio_allocations", {}),
+                per_strategy_performance=raw.get("per_strategy_performance", {}),
             )
         return VaultState(vault_id=self.vault_id)
 
@@ -217,6 +239,9 @@ class VaultManager:
             "description": self.state.description,
             "performance_history": self.state.performance_history[-100:],
             "social_stats": self.state.social_stats,
+            "portfolio_mode": self.state.portfolio_mode,
+            "portfolio_allocations": self.state.portfolio_allocations,
+            "per_strategy_performance": self.state.per_strategy_performance,
         }
         self.state_file.write_text(json.dumps(data, indent=2))
 
@@ -506,8 +531,95 @@ class VaultManager:
         }
 
     async def run_strategy_cycle(self) -> dict:
-        """Run one strategy cycle."""
+        """Run one strategy cycle with risk management."""
+        self._sync_risk_positions()
+        risk_status = await self.risk_manager.check_risk_limits(self.state)
+
+        if risk_status.level == RiskLevel.VIOLATION:
+            logger.warning(f"Risk violation detected, skipping strategy cycle: {risk_status.violations}")
+
+        if self.risk_manager.emergency_stop_active:
+            logger.critical("Emergency stop active, halting all trading")
+            return {
+                "strategy": {"entered": [], "exited": [], "held": [], "errors": ["Emergency stop active"]},
+                "strategy_id": self.state.strategy_id,
+                "strategy_name": STRATEGY_REGISTRY[self.state.strategy_id]["name"],
+                "risk_status": {"level": risk_status.level.value, "violations": risk_status.violations, "circuit_breaker": risk_status.circuit_breaker_active, "emergency_stop": True},
+                "pnl": await self.calculate_pnl(),
+                "timestamp": int(time.time() * 1000),
+            }
+
+        if self.risk_manager.circuit_breaker_active:
+            logger.warning("Circuit breaker active, closing positions only")
+            exit_actions = {"entered": [], "exited": [], "held": [], "errors": []}
+            if hasattr(self.strategy, 'active_positions'):
+                for symbol in list(self.strategy.active_positions.keys()):
+                    try:
+                        if await self.strategy.should_exit(symbol) if hasattr(self.strategy, 'should_exit') else True:
+                            if await self._close_position(symbol):
+                                exit_actions["exited"].append(symbol)
+                                self.risk_manager.record_trade_result(0, symbol, "exit")
+                    except Exception as e:
+                        exit_actions["errors"].append(f"{symbol}: {e}")
+            return {
+                "strategy": exit_actions,
+                "strategy_id": self.state.strategy_id,
+                "strategy_name": STRATEGY_REGISTRY[self.state.strategy_id]["name"],
+                "risk_status": {"level": risk_status.level.value, "warnings": risk_status.warnings, "circuit_breaker": True},
+                "pnl": await self.calculate_pnl(),
+                "timestamp": int(time.time() * 1000),
+            }
+
+        if self.state.portfolio_mode and self.portfolio_manager:
+            portfolio_results = await self.portfolio_manager.run_cycle()
+            combined_pnl = await self.portfolio_manager.get_combined_pnl()
+            drift_report = await self.portfolio_manager.get_drift_report()
+
+            self.state.per_strategy_performance = combined_pnl.get("strategy_breakdown", {})
+
+            vault_value = combined_pnl.get("total_value", self.state.total_deposited)
+            net_pnl = combined_pnl.get("combined_pnl", 0.0)
+            pnl_pct = combined_pnl.get("combined_pnl_pct", 0.0)
+
+            self.state.performance_history.append({
+                "timestamp": int(time.time() * 1000),
+                "vault_value": vault_value,
+                "net_pnl": net_pnl,
+                "pnl_pct": pnl_pct,
+            })
+
+            self._save_state()
+
+            return {
+                "portfolio_mode": True,
+                "strategy_results": portfolio_results,
+                "combined_pnl": combined_pnl,
+                "drift_report": drift_report,
+                "pnl": {
+                    "vault_value": vault_value,
+                    "net_pnl": net_pnl,
+                    "pnl_pct": pnl_pct,
+                    "total_deposited": self.state.total_deposited,
+                },
+                "timestamp": int(time.time() * 1000),
+            }
+
         strategy_result = await self.strategy.run_cycle()
+
+        for symbol in strategy_result.get("entered", []):
+            entry_info = symbol if isinstance(symbol, str) else symbol.get("symbol", "")
+            allowed = await self.risk_manager.should_allow_new_position(entry_info, 0)
+            if not allowed:
+                logger.warning(f"Risk manager blocked new position: {entry_info}")
+                if entry_info in self.strategy.active_positions:
+                    await self._close_position(entry_info)
+
+        for symbol in strategy_result.get("exited", []):
+            sym = symbol if isinstance(symbol, str) else symbol.get("symbol", str(symbol))
+            self.risk_manager.record_trade_result(0, sym, "exit")
+
+        if strategy_result.get("errors"):
+            self.risk_manager.record_trade_result(0, "error", "error")
 
         # Only run rebalancer for delta_neutral strategy
         if self.state.strategy_id == "delta_neutral":
@@ -530,7 +642,7 @@ class VaultManager:
         pnl = await self.calculate_pnl()
         strategy_info = STRATEGY_REGISTRY.get(self.state.strategy_id, {})
 
-        return {
+        result = {
             "vault_id": self.vault_id,
             "vault_name": self.state.vault_name,
             "description": self.state.description,
@@ -557,4 +669,137 @@ class VaultManager:
             "cloned_from": self.state.cloned_from,
             "clone_count": self.state.clone_count,
             "social_stats": self.state.social_stats,
+            "risk": {
+                "circuit_breaker_active": self.risk_manager.circuit_breaker_active,
+                "circuit_breaker_reason": self.risk_manager.circuit_breaker_reason,
+                "emergency_stop_active": self.risk_manager.emergency_stop_active,
+                "emergency_stop_type": self.risk_manager.emergency_stop_type.value if self.risk_manager.emergency_stop_type else None,
+                "consecutive_losses": self.risk_manager.consecutive_losses,
+                "peak_value": self.risk_manager.peak_value,
+            },
+            "portfolio_mode": self.state.portfolio_mode,
+            "portfolio_allocations": self.state.portfolio_allocations,
+            "per_strategy_performance": self.state.per_strategy_performance,
         }
+
+        if self.state.portfolio_mode and self.portfolio_manager:
+            combined_pnl = await self.portfolio_manager.get_combined_pnl()
+            drift_report = await self.portfolio_manager.get_drift_report()
+            result["portfolio"] = {
+                "combined_pnl": combined_pnl,
+                "drift_report": drift_report,
+                "strategy_status": self.portfolio_manager.get_status(),
+            }
+
+        return result
+
+    async def configure_portfolio(self, allocations: dict[str, float], rebalance_threshold: float = 0.05) -> dict:
+        for sid in allocations:
+            if sid not in STRATEGY_REGISTRY:
+                raise ValueError(f"Unknown strategy: {sid}")
+
+        total = sum(allocations.values())
+        if abs(total - 1.0) > 0.01:
+            raise ValueError(f"Allocations must sum to ~1.0, got {total:.4f}")
+
+        for pct in allocations.values():
+            if pct < 0 or pct > 1:
+                raise ValueError(f"Allocation must be between 0 and 1")
+
+        if self.state.portfolio_mode and self.portfolio_manager:
+            errors = self.portfolio_manager.update_allocations(allocations)
+            if errors:
+                raise ValueError("; ".join(errors))
+            self.portfolio_manager.config.rebalance_threshold = rebalance_threshold
+        else:
+            portfolio_config = PortfolioConfig(
+                allocations=allocations,
+                rebalance_threshold=rebalance_threshold,
+            )
+            self.portfolio_manager = PortfolioManager(
+                self.client, portfolio_config, total_capital=self.state.total_deposited
+            )
+
+        self.state.portfolio_mode = True
+        self.state.portfolio_allocations = allocations
+        self._save_state()
+
+        logger.info(f"Portfolio configured for vault {self.vault_id}: {allocations}")
+        return {
+            "status": "configured",
+            "vault_id": self.vault_id,
+            "portfolio_mode": True,
+            "allocations": allocations,
+            "rebalance_threshold": rebalance_threshold,
+        }
+
+    async def get_portfolio_status(self) -> dict:
+        if not self.state.portfolio_mode or not self.portfolio_manager:
+            return {
+                "portfolio_mode": False,
+                "message": "Portfolio mode not enabled. Configure allocations first.",
+            }
+
+        combined_pnl = await self.portfolio_manager.get_combined_pnl()
+        drift_report = await self.portfolio_manager.get_drift_report()
+        portfolio_status = self.portfolio_manager.get_status()
+
+        return {
+            "portfolio_mode": True,
+            "allocations": self.state.portfolio_allocations,
+            "combined_pnl": combined_pnl,
+            "drift_report": drift_report,
+            "portfolio_status": portfolio_status,
+            "per_strategy_performance": self.state.per_strategy_performance,
+        }
+
+    async def rebalance_portfolio(self) -> dict:
+        if not self.state.portfolio_mode or not self.portfolio_manager:
+            raise RuntimeError("Portfolio mode not enabled")
+
+        result = await self.portfolio_manager.rebalance()
+        self.state.per_strategy_performance = (
+            await self.portfolio_manager.get_combined_pnl()
+        ).get("strategy_breakdown", {})
+        self._save_state()
+
+        logger.info(f"Portfolio rebalanced for vault {self.vault_id}: {result.get('status')}")
+        return result
+
+    async def emergency_stop(self, stop_type: str = "kill_switch") -> dict:
+        result = await self.risk_manager.emergency_stop(stop_type)
+        if stop_type == "kill_switch" and hasattr(self.strategy, 'active_positions'):
+            for symbol in list(self.strategy.active_positions.keys()):
+                try:
+                    await self._close_position(symbol)
+                    logger.info(f"Emergency closed {symbol}")
+                except Exception as e:
+                    logger.error(f"Emergency close failed for {symbol}: {e}")
+        return result
+
+    async def resume_trading(self) -> dict:
+        return await self.risk_manager.resume_trading()
+
+    async def get_risk_status(self) -> dict:
+        self._sync_risk_positions()
+        risk_status = await self.risk_manager.check_risk_limits(self.state)
+        report = await self.risk_manager.get_risk_report()
+        return {
+            "level": risk_status.level.value,
+            "daily_pnl_pct": risk_status.daily_pnl_pct,
+            "drawdown_pct": risk_status.drawdown_pct,
+            "consecutive_losses": risk_status.consecutive_losses,
+            "circuit_breaker_active": risk_status.circuit_breaker_active,
+            "emergency_stop_active": risk_status.emergency_stop_active,
+            "emergency_stop_type": risk_status.emergency_stop_type,
+            "warnings": risk_status.warnings,
+            "violations": risk_status.violations,
+            "position_usage_pct": risk_status.position_usage_pct,
+            "sector_exposure": risk_status.sector_exposure,
+            "correlated_exposure": risk_status.correlated_exposure,
+            "report": report,
+        }
+
+    def configure_risk(self, updates: dict) -> dict:
+        config = self.risk_manager.update_config(updates)
+        return {"status": "updated", "config": {k: v for k, v in config.__dict__.items() if not k.startswith('_')}}
