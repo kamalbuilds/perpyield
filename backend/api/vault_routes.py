@@ -45,6 +45,11 @@ class PortfolioConfigureRequest(BaseModel):
     rebalance_threshold: float = 0.05
 
 
+class WithdrawFeesRequest(BaseModel):
+    creator_address: str
+    amount: Optional[float] = None
+
+
 # ========== Vault Management ==========
 
 @router.get("/api/vault/status")
@@ -375,6 +380,42 @@ async def portfolio_rebalance():
         vm = _get_vault_manager()
         return await vm.rebalance_portfolio()
     except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ========== Fee System ==========
+
+@router.get("/api/vault/fees")
+async def vault_fees():
+    """Get current fee structure and accrued fees for this vault."""
+    try:
+        vm = _get_vault_manager()
+        return vm.get_fee_info()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.get("/api/creator/dashboard")
+async def creator_dashboard(creator_address: str):
+    """Get creator dashboard with fee earnings, AUM, depositor count."""
+    try:
+        vm = _get_vault_manager()
+        return await vm.get_creator_dashboard(creator_address)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/api/creator/withdraw-fees")
+async def creator_withdraw_fees(req: WithdrawFeesRequest):
+    """Withdraw accrued creator fees."""
+    try:
+        vm = _get_vault_manager()
+        return await vm.withdraw_creator_fees(req.creator_address, req.amount)
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))

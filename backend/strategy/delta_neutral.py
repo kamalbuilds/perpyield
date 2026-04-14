@@ -5,6 +5,7 @@ from typing import Optional
 
 from pacifica.client import PacificaClient, sf
 from strategy.funding_scanner import FundingScanner, FundingOpportunity
+from indicators.ichimoku import IchimokuCalculator, IchimokuSignal, IchimokuTrend
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,41 @@ class StrategyConfig:
 
 
 class DeltaNeutralStrategy:
+    STRATEGY_ID = "delta_neutral"
+    STRATEGY_NAME = "Delta Neutral (Funding Arbitrage)"
+    STRATEGY_DESC = "Earn funding rate payments by shorting high-funding assets"
+    INDICATORS = ["Funding Rate", "Funding History", "Ichimoku Cloud"]
+
     def __init__(self, client: PacificaClient, config: Optional[StrategyConfig] = None):
         self.client = client
         self.config = config or StrategyConfig()
         self.scanner = FundingScanner(client, min_apy=self.config.min_apy)
         self.active_positions: dict[str, PositionPair] = {}
+        self.ichimoku = IchimokuCalculator()
+
+    async def _get_ichimoku_bias(self, symbol: str) -> str:
+        try:
+            end_ms = int(time.time() * 1000)
+            start_ms = end_ms - (48 * 3600 * 1000)
+            candles = await self.client.get_candles(symbol, "1h", start_ms, end_ms)
+            if len(candles) < 52:
+                return "neutral"
+            prices = await self.client.get_prices()
+            price_data = next((p for p in prices if p.symbol == symbol), None)
+            if not price_data:
+                return "neutral"
+            current_price = sf(price_data.mark)
+            cloud = self.ichimoku.calculate(candles, current_price)
+            if not cloud:
+                return "neutral"
+            signal = self.ichimoku.generate_signal(cloud, current_price)
+            if signal.bullish_conditions >= 3:
+                return "bullish"
+            elif signal.bearish_conditions >= 3:
+                return "bearish"
+            return "neutral"
+        except Exception:
+            return "neutral"
 
     async def find_opportunities(self) -> list[FundingOpportunity]:
         if not self.client.public_key:
@@ -54,6 +85,13 @@ class DeltaNeutralStrategy:
                 continue
             if opp.trend == "falling":
                 continue
+            ichimoku_bias = await self._get_ichimoku_bias(opp.symbol)
+            if ichimoku_bias == "bearish" and opp.funding_rate > 0:
+                opp._ichimoku_bias = "bearish"
+            elif ichimoku_bias == "bullish" and opp.funding_rate < 0:
+                opp._ichimoku_bias = "bullish"
+            else:
+                opp._ichimoku_bias = ichimoku_bias
             filtered.append(opp)
         return filtered
 
@@ -80,6 +118,15 @@ class DeltaNeutralStrategy:
         if history.positive_rate_pct < 70:
             return False
         if history.avg_rate_24h < self.config.min_funding_rate * 0.5:
+            return False
+
+        ichimoku_bias = getattr(opportunity, '_ichimoku_bias', 'neutral')
+        if ichimoku_bias == "bearish" and opportunity.funding_rate > 0:
+            pass
+        elif ichimoku_bias == "bullish" and opportunity.funding_rate < 0:
+            pass
+        elif ichimoku_bias == "bearish" and opportunity.funding_rate <= 0:
+            logger.info(f"{opportunity.symbol}: Ichimoku bearish bias but negative funding, skipping")
             return False
 
         return True

@@ -203,6 +203,9 @@ function VaultCard({
         <span className="px-2 py-0.5 rounded text-[10px] bg-white/5 text-muted border border-card-border">
           {vault.strategy_name}
         </span>
+        <span className="px-2 py-0.5 rounded text-[10px] bg-accent-green/10 text-accent-green border border-accent-green/20">
+          10% perf, 0.5% mgmt
+        </span>
       </div>
 
       <div className="grid grid-cols-3 gap-3 mb-4">

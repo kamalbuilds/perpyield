@@ -5,6 +5,7 @@ from typing import Optional, List
 from enum import Enum
 
 from pacifica.client import PacificaClient, sf
+from indicators.ichimoku import IchimokuCalculator, IchimokuSignal, IchimokuTrend
 
 logger = logging.getLogger(__name__)
 
@@ -83,13 +84,14 @@ class MomentumSwingStrategy:
     STRATEGY_ID = "momentum_swing"
     STRATEGY_NAME = "Momentum Swing"
     STRATEGY_DESC = "Trend-following strategy using EMA crossover + RSI + MACD"
-    INDICATORS = ["EMA", "RSI", "MACD"]
+    INDICATORS = ["EMA", "RSI", "MACD", "Ichimoku Cloud"]
 
     def __init__(self, client: PacificaClient, config: Optional[MomentumConfig] = None):
         self.client = client
         self.config = config or MomentumConfig()
         self.active_positions: dict[str, MomentumPosition] = {}
         self.signal_history: List[MomentumSignal] = []
+        self.ichimoku = IchimokuCalculator()
 
     async def calculate_ema(self, candles: list, period: int) -> float:
         """Calculate EMA from candle closes."""
@@ -213,6 +215,35 @@ class MomentumSwingStrategy:
                 momentum_score, direction = self.calculate_momentum_score(
                     ema_fast, ema_slow, rsi, price_change_24h
                 )
+
+                ichimoku_data = {}
+                ichimoku_breakout_bonus = 0.0
+                if len(candles) >= 52:
+                    cloud = self.ichimoku.calculate(candles, current_price)
+                    if cloud:
+                        ichimoku_signal = self.ichimoku.generate_signal(cloud, current_price)
+                        breakout = self.ichimoku.cloud_breakout_signal(cloud, current_price)
+                        ichimoku_data = {
+                            "tenkan_sen": cloud.tenkan_sen,
+                            "kijun_sen": cloud.kijun_sen,
+                            "cloud_top": cloud.cloud_top,
+                            "cloud_bottom": cloud.cloud_bottom,
+                            "cloud_color": cloud.cloud_color,
+                            "price_vs_cloud": ichimoku_signal.price_vs_cloud,
+                            "tk_cross": ichimoku_signal.tk_cross,
+                            "breakout": breakout,
+                            "ichimoku_trend": ichimoku_signal.trend.value,
+                        }
+                        if direction == TrendDirection.BULLISH and breakout in ("strong_breakout_above", "breakout_above"):
+                            ichimoku_breakout_bonus = 15.0
+                        elif direction == TrendDirection.BEARISH and breakout in ("strong_breakout_below", "breakout_below"):
+                            ichimoku_breakout_bonus = 15.0
+                        if ichimoku_signal.bullish_conditions >= 3 and direction == TrendDirection.BULLISH:
+                            ichimoku_breakout_bonus += 10.0
+                        elif ichimoku_signal.bearish_conditions >= 3 and direction == TrendDirection.BEARISH:
+                            ichimoku_breakout_bonus += 10.0
+
+                momentum_score = min(100, momentum_score + ichimoku_breakout_bonus)
 
                 # Volume check
                 volume_24h = sf(price_data.volume_24h)

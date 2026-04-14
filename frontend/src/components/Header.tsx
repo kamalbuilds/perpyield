@@ -8,6 +8,7 @@ const navItems = [
   { href: "/leaderboard", label: "Leaderboard" },
   { href: "/", label: "Dashboard" },
   { href: "/marketplace", label: "Marketplace" },
+  { href: "/creator", label: "Creator" },
   { href: "/backtest", label: "Backtest" },
   { href: "/analytics", label: "Analytics" },
   { href: "/strategy", label: "Strategy" },

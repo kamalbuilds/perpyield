@@ -17,6 +17,26 @@ from strategy.risk_manager import RiskManager, RiskConfig, RiskLevel
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class FeeConfig:
+    management_fee_annual: float = 0.005
+    performance_fee: float = 0.10
+    protocol_fee: float = 0.005
+    creator_address: Optional[str] = None
+    high_water_mark: float = 0.0
+    last_fee_charge_time: int = 0
+
+
+@dataclass
+class FeeAccrual:
+    creator_management_fees_earned: float = 0.0
+    creator_performance_fees_earned: float = 0.0
+    protocol_fees_earned: float = 0.0
+    creator_fees_withdrawn: float = 0.0
+    protocol_fees_withdrawn: float = 0.0
+    fee_charge_history: list = field(default_factory=list)
+
+
 # Strategy Registry - Maps strategy IDs to their classes and configs
 STRATEGY_REGISTRY = {
     "delta_neutral": {
@@ -109,7 +129,7 @@ class VaultState:
     created_at: int = 0
     updated_at: int = 0
     is_active: bool = True
-    strategy_id: str = "delta_neutral"  # Default strategy
+    strategy_id: str = "delta_neutral"
     strategy_config: dict = field(default_factory=dict)
     cloned_from: Optional[str] = None
     clone_count: int = 0
@@ -121,6 +141,21 @@ class VaultState:
     portfolio_mode: bool = False
     portfolio_allocations: dict[str, float] = field(default_factory=dict)
     per_strategy_performance: dict[str, dict] = field(default_factory=dict)
+    fee_config: dict = field(default_factory=lambda: {
+        "management_fee_annual": 0.005,
+        "performance_fee": 0.10,
+        "protocol_fee": 0.005,
+        "high_water_mark": 0.0,
+        "last_fee_charge_time": 0,
+    })
+    fee_accrual: dict = field(default_factory=lambda: {
+        "creator_management_fees_earned": 0.0,
+        "creator_performance_fees_earned": 0.0,
+        "protocol_fees_earned": 0.0,
+        "creator_fees_withdrawn": 0.0,
+        "protocol_fees_withdrawn": 0.0,
+        "fee_charge_history": [],
+    })
 
 
 class VaultManager:
@@ -215,6 +250,21 @@ class VaultManager:
                 portfolio_mode=raw.get("portfolio_mode", False),
                 portfolio_allocations=raw.get("portfolio_allocations", {}),
                 per_strategy_performance=raw.get("per_strategy_performance", {}),
+                fee_config=raw.get("fee_config", {
+                    "management_fee_annual": 0.005,
+                    "performance_fee": 0.10,
+                    "protocol_fee": 0.005,
+                    "high_water_mark": 0.0,
+                    "last_fee_charge_time": 0,
+                }),
+                fee_accrual=raw.get("fee_accrual", {
+                    "creator_management_fees_earned": 0.0,
+                    "creator_performance_fees_earned": 0.0,
+                    "protocol_fees_earned": 0.0,
+                    "creator_fees_withdrawn": 0.0,
+                    "protocol_fees_withdrawn": 0.0,
+                    "fee_charge_history": [],
+                }),
             )
         return VaultState(vault_id=self.vault_id)
 
@@ -242,6 +292,8 @@ class VaultManager:
             "portfolio_mode": self.state.portfolio_mode,
             "portfolio_allocations": self.state.portfolio_allocations,
             "per_strategy_performance": self.state.per_strategy_performance,
+            "fee_config": self.state.fee_config,
+            "fee_accrual": self.state.fee_accrual,
         }
         self.state_file.write_text(json.dumps(data, indent=2))
 
@@ -629,12 +681,15 @@ class VaultManager:
 
         pnl = await self.calculate_pnl()
 
+        fee_result = await self.charge_fees()
+
         return {
             "strategy": strategy_result,
             "strategy_id": self.state.strategy_id,
             "strategy_name": STRATEGY_REGISTRY[self.state.strategy_id]["name"],
             "rebalances": rebalance_result,
             "pnl": pnl,
+            "fees": fee_result,
             "timestamp": int(time.time() * 1000),
         }
 
@@ -680,6 +735,7 @@ class VaultManager:
             "portfolio_mode": self.state.portfolio_mode,
             "portfolio_allocations": self.state.portfolio_allocations,
             "per_strategy_performance": self.state.per_strategy_performance,
+            "fees": self.get_fee_info()["fee_structure"],
         }
 
         if self.state.portfolio_mode and self.portfolio_manager:
@@ -803,3 +859,185 @@ class VaultManager:
     def configure_risk(self, updates: dict) -> dict:
         config = self.risk_manager.update_config(updates)
         return {"status": "updated", "config": {k: v for k, v in config.__dict__.items() if not k.startswith('_')}}
+
+    async def charge_fees(self) -> dict:
+        vault_value = await self.get_total_vault_value()
+        now_ms = int(time.time() * 1000)
+        last_charge = self.state.fee_config.get("last_fee_charge_time", 0)
+
+        mgmt_fee_annual = self.state.fee_config.get("management_fee_annual", 0.005)
+        perf_fee_rate = self.state.fee_config.get("performance_fee", 0.10)
+        protocol_fee_rate = self.state.fee_config.get("protocol_fee", 0.005)
+        high_water_mark = self.state.fee_config.get("high_water_mark", 0.0)
+
+        days_elapsed = 0.0
+        if last_charge > 0:
+            days_elapsed = (now_ms - last_charge) / (86400 * 1000)
+        elif self.state.created_at > 0:
+            days_elapsed = (now_ms - self.state.created_at) / (86400 * 1000)
+            last_charge = self.state.created_at
+
+        if days_elapsed < 1.0:
+            return {"status": "skipped", "reason": "less_than_one_day_since_last_charge"}
+
+        mgmt_fee = vault_value * (mgmt_fee_annual / 365) * days_elapsed
+
+        perf_fee = 0.0
+        if high_water_mark <= 0 and vault_value > self.state.total_deposited:
+            high_water_mark = self.state.total_deposited
+
+        if vault_value > high_water_mark and high_water_mark > 0:
+            profit = vault_value - high_water_mark
+            perf_fee = profit * perf_fee_rate
+            self.state.fee_config["high_water_mark"] = vault_value
+        elif high_water_mark <= 0 and vault_value > 0:
+            self.state.fee_config["high_water_mark"] = vault_value
+
+        protocol_fee_amount = (mgmt_fee + perf_fee) * protocol_fee_rate
+        total_fee = mgmt_fee + perf_fee + protocol_fee_amount
+
+        self.state.fee_config["last_fee_charge_time"] = now_ms
+        self.state.fee_config["high_water_mark"] = self.state.fee_config.get("high_water_mark", vault_value)
+
+        self.state.fee_accrual["creator_management_fees_earned"] = self.state.fee_accrual.get("creator_management_fees_earned", 0.0) + mgmt_fee
+        self.state.fee_accrual["creator_performance_fees_earned"] = self.state.fee_accrual.get("creator_performance_fees_earned", 0.0) + perf_fee
+        self.state.fee_accrual["protocol_fees_earned"] = self.state.fee_accrual.get("protocol_fees_earned", 0.0) + protocol_fee_amount
+
+        charge_record = {
+            "timestamp": now_ms,
+            "vault_value": vault_value,
+            "days_charged": round(days_elapsed, 2),
+            "management_fee": round(mgmt_fee, 8),
+            "performance_fee": round(perf_fee, 8),
+            "protocol_fee": round(protocol_fee_amount, 8),
+            "total_fee": round(total_fee, 8),
+            "high_water_mark": self.state.fee_config["high_water_mark"],
+        }
+        history = self.state.fee_accrual.get("fee_charge_history", [])
+        history.append(charge_record)
+        self.state.fee_accrual["fee_charge_history"] = history[-100:]
+
+        self.state.total_fees_paid += total_fee
+        self._save_state()
+
+        logger.info(
+            f"Fees charged for vault {self.vault_id}: "
+            f"mgmt=${mgmt_fee:.6f}, perf=${perf_fee:.6f}, protocol=${protocol_fee_amount:.6f}"
+        )
+
+        return {
+            "status": "charged",
+            "management_fee": mgmt_fee,
+            "performance_fee": perf_fee,
+            "protocol_fee": protocol_fee_amount,
+            "total_fee": total_fee,
+            "days_charged": days_elapsed,
+            "high_water_mark": self.state.fee_config["high_water_mark"],
+        }
+
+    def get_fee_info(self) -> dict:
+        mgmt = self.state.fee_config.get("management_fee_annual", 0.005)
+        perf = self.state.fee_config.get("performance_fee", 0.10)
+        proto = self.state.fee_config.get("protocol_fee", 0.005)
+        hwm = self.state.fee_config.get("high_water_mark", 0.0)
+        last = self.state.fee_config.get("last_fee_charge_time", 0)
+
+        creator_mgmt = self.state.fee_accrual.get("creator_management_fees_earned", 0.0)
+        creator_perf = self.state.fee_accrual.get("creator_performance_fees_earned", 0.0)
+        protocol_accrued = self.state.fee_accrual.get("protocol_fees_earned", 0.0)
+        creator_withdrawn = self.state.fee_accrual.get("creator_fees_withdrawn", 0.0)
+
+        return {
+            "vault_id": self.vault_id,
+            "fee_structure": {
+                "management_fee_annual": mgmt,
+                "management_fee_annual_pct": f"{mgmt * 100:.1f}%",
+                "performance_fee": perf,
+                "performance_fee_pct": f"{perf * 100:.0f}%",
+                "protocol_fee": proto,
+                "protocol_fee_pct": f"{proto * 100:.1f}%",
+            },
+            "high_water_mark": hwm,
+            "last_fee_charge_time": last,
+            "accrued": {
+                "creator_management_fees": creator_mgmt,
+                "creator_performance_fees": creator_perf,
+                "creator_total_earned": creator_mgmt + creator_perf,
+                "creator_fees_withdrawn": creator_withdrawn,
+                "creator_fees_claimable": creator_mgmt + creator_perf - creator_withdrawn,
+                "protocol_fees_earned": protocol_accrued,
+            },
+        }
+
+    async def get_creator_dashboard(self, creator_address: str) -> dict:
+        if self.state.creator_address and self.state.creator_address != creator_address:
+            raise ValueError("Not the creator of this vault")
+
+        vault_value = await self.get_total_vault_value()
+        fee_info = self.get_fee_info()
+        accrued = fee_info["accrued"]
+
+        history = self.state.fee_accrual.get("fee_charge_history", [])
+        recent_charges = history[-30:]
+
+        total_creator_earned = accrued["creator_total_earned"]
+        total_protocol_earned = accrued["protocol_fees_earned"]
+
+        daily_avg_creator = 0.0
+        if self.state.created_at > 0:
+            age_days = (time.time() * 1000 - self.state.created_at) / (86400 * 1000)
+            if age_days > 0:
+                daily_avg_creator = total_creator_earned / age_days
+
+        return {
+            "creator_address": creator_address,
+            "vault_id": self.vault_id,
+            "vault_name": self.state.vault_name or self.vault_id,
+            "strategy_id": self.state.strategy_id,
+            "strategy_name": STRATEGY_REGISTRY.get(self.state.strategy_id, {}).get("name", "Unknown"),
+            "aum": vault_value,
+            "depositor_count": len(self.state.depositors),
+            "total_deposited": self.state.total_deposited,
+            "fee_earnings": {
+                "management_fees_earned": accrued["creator_management_fees"],
+                "performance_fees_earned": accrued["creator_performance_fees"],
+                "total_earned": total_creator_earned,
+                "claimable": accrued["creator_fees_claimable"],
+                "withdrawn": accrued["creator_fees_withdrawn"],
+                "daily_average": daily_avg_creator,
+            },
+            "protocol_fees": {
+                "total_earned": total_protocol_earned,
+                "withdrawn": self.state.fee_accrual.get("protocol_fees_withdrawn", 0.0),
+            },
+            "fee_structure": fee_info["fee_structure"],
+            "high_water_mark": fee_info["high_water_mark"],
+            "recent_fee_charges": recent_charges,
+            "vault_active": self.state.is_active,
+        }
+
+    async def withdraw_creator_fees(self, creator_address: str, amount: Optional[float] = None) -> dict:
+        if self.state.creator_address and self.state.creator_address != creator_address:
+            raise ValueError("Not the creator of this vault")
+
+        fee_info = self.get_fee_info()
+        claimable = fee_info["accrued"]["creator_fees_claimable"]
+
+        if claimable <= 0:
+            return {"status": "no_fees", "message": "No claimable fees available"}
+
+        withdraw_amount = min(amount or claimable, claimable)
+
+        self.state.fee_accrual["creator_fees_withdrawn"] = self.state.fee_accrual.get("creator_fees_withdrawn", 0.0) + withdraw_amount
+        self._save_state()
+
+        logger.info(f"Creator {creator_address} withdrew ${withdraw_amount:.6f} in fees from vault {self.vault_id}")
+
+        return {
+            "status": "withdrawn",
+            "creator_address": creator_address,
+            "amount": withdraw_amount,
+            "remaining_claimable": claimable - withdraw_amount,
+            "total_earned": fee_info["accrued"]["creator_total_earned"],
+            "total_withdrawn": self.state.fee_accrual["creator_fees_withdrawn"],
+        }

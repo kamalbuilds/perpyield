@@ -30,6 +30,7 @@ export interface VaultStatus {
   annualized_return: number;
   depositor_count: number;
   active_positions: number;
+  fees?: FeeStructure;
 }
 
 export async function fetchVaultStatus(): Promise<VaultStatus> {
@@ -566,4 +567,242 @@ export interface AIAlert {
 export async function fetchAIAlerts(): Promise<AIAlert[]> {
   const res = await apiFetch<{ success: boolean; data: AIAlert[] }>("/api/ai/alerts");
   return res.data;
+}
+
+// ---- Risk Management ----
+
+export interface RiskStatus {
+  level: "ok" | "warning" | "violation";
+  daily_pnl_pct: number;
+  drawdown_pct: number;
+  consecutive_losses: number;
+  circuit_breaker_active: boolean;
+  emergency_stop_active: boolean;
+  emergency_stop_type: string | null;
+  warnings: string[];
+  violations: string[];
+  position_usage_pct: number;
+  sector_exposure: Record<string, number>;
+  correlated_exposure: Record<string, number>;
+  report: {
+    emergency_stop_active: boolean;
+    emergency_stop_type: string | null;
+    circuit_breaker_active: boolean;
+    circuit_breaker_reason: string | null;
+    consecutive_losses: number;
+    peak_value: number;
+    daily_pnl: number;
+    daily_trade_count: number;
+    daily_win_rate: number;
+    daily_winning_trades: number;
+    daily_losing_trades: number;
+    sector_exposure: Record<string, number>;
+    correlated_exposure: Record<string, number>;
+    config: {
+      daily_loss_limit_pct: number;
+      max_drawdown_pct: number;
+      consecutive_losses_limit: number;
+      max_position_size_pct: number;
+      max_correlated_exposure: number;
+      max_sector_exposure: number;
+      position_sizing_method: string;
+      fixed_risk_per_trade_pct: number;
+      kelly_fraction: number;
+      enable_circuit_breaker: boolean;
+      funding_rate_flip_protection: boolean;
+    };
+  };
+}
+
+export async function fetchRiskStatus(): Promise<RiskStatus> {
+  return apiFetch<RiskStatus>("/api/vault/risk/status");
+}
+
+export interface RiskConfigUpdate {
+  daily_loss_limit_pct?: number;
+  max_drawdown_pct?: number;
+  consecutive_losses_limit?: number;
+  max_position_size_pct?: number;
+  max_correlated_exposure?: number;
+  max_sector_exposure?: number;
+  enable_circuit_breaker?: boolean;
+  funding_rate_flip_protection?: boolean;
+  fixed_risk_per_trade_pct?: number;
+  position_sizing_method?: string;
+  kelly_fraction?: number;
+  volatility_adjust?: boolean;
+}
+
+export async function configureRisk(config: RiskConfigUpdate): Promise<{ status: string; config: Record<string, unknown> }> {
+  return apiFetch("/api/vault/risk/configure", {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+}
+
+export async function emergencyStop(stopType: "kill_switch" | "gradual_unwind" = "kill_switch"): Promise<{ status: string; stop_type: string; timestamp: number }> {
+  return apiFetch("/api/vault/emergency-stop", {
+    method: "POST",
+    body: JSON.stringify({ stop_type: stopType }),
+  });
+}
+
+export async function resumeTrading(): Promise<{ status: string; timestamp: number }> {
+  return apiFetch("/api/vault/resume-trading", { method: "POST" });
+}
+
+// ---- Portfolio ----
+
+export interface StrategyBreakdown {
+  strategy_id: string;
+  allocated_pct: number;
+  current_pct: number;
+  allocated_value: number;
+  current_value: number;
+  pnl: number;
+  pnl_pct: number;
+  active_positions: number;
+  drift: number;
+}
+
+export interface PortfolioPnl {
+  combined_pnl: number;
+  combined_pnl_pct: number;
+  total_value: number;
+  total_allocated: number;
+  strategy_breakdown: Record<string, StrategyBreakdown>;
+}
+
+export interface DriftEntry {
+  strategy_id: string;
+  target_pct: number;
+  actual_pct: number;
+  drift: number;
+  needs_rebalance: boolean;
+}
+
+export interface PortfolioStatusResponse {
+  portfolio_mode: boolean;
+  message?: string;
+  allocations?: Record<string, number>;
+  combined_pnl?: PortfolioPnl;
+  drift_report?: {
+    needs_rebalance: boolean;
+    threshold: number;
+    drifts: Record<string, DriftEntry>;
+  };
+  portfolio_status?: {
+    portfolio_mode: boolean;
+    allocations: Record<string, number>;
+    rebalance_threshold: number;
+    strategy_count: number;
+    strategies: Record<string, {
+      allocated_pct: number;
+      current_pct: number;
+      pnl: number;
+      pnl_pct: number;
+      active_positions: number;
+    }>;
+  };
+  per_strategy_performance?: Record<string, StrategyBreakdown>;
+}
+
+export async function fetchPortfolioStatus(): Promise<PortfolioStatusResponse> {
+  return apiFetch<PortfolioStatusResponse>("/api/vault/portfolio/status");
+}
+
+export async function configurePortfolio(
+  allocations: Record<string, number>,
+  rebalanceThreshold: number = 0.05
+): Promise<{ status: string; vault_id: string; portfolio_mode: boolean; allocations: Record<string, number>; rebalance_threshold: number }> {
+  return apiFetch("/api/vault/portfolio/configure", {
+    method: "POST",
+    body: JSON.stringify({ allocations, rebalance_threshold: rebalanceThreshold }),
+  });
+}
+
+export async function rebalancePortfolio(): Promise<{ status: string; adjustments: unknown[]; new_allocations: Record<string, number> }> {
+  return apiFetch("/api/vault/portfolio/rebalance", {
+    method: "POST",
+  });
+}
+
+// ---- Fee System ----
+
+export interface FeeStructure {
+  management_fee_annual: number;
+  management_fee_annual_pct: string;
+  performance_fee: number;
+  performance_fee_pct: string;
+  protocol_fee: number;
+  protocol_fee_pct: string;
+}
+
+export interface VaultFeesResponse {
+  vault_id: string;
+  fee_structure: FeeStructure;
+  high_water_mark: number;
+  last_fee_charge_time: number;
+  accrued: {
+    creator_management_fees: number;
+    creator_performance_fees: number;
+    creator_total_earned: number;
+    creator_fees_withdrawn: number;
+    creator_fees_claimable: number;
+    protocol_fees_earned: number;
+  };
+}
+
+export async function fetchVaultFees(): Promise<VaultFeesResponse> {
+  return apiFetch<VaultFeesResponse>("/api/vault/fees");
+}
+
+export interface CreatorDashboard {
+  creator_address: string;
+  vault_id: string;
+  vault_name: string;
+  strategy_id: string;
+  strategy_name: string;
+  aum: number;
+  depositor_count: number;
+  total_deposited: number;
+  fee_earnings: {
+    management_fees_earned: number;
+    performance_fees_earned: number;
+    total_earned: number;
+    claimable: number;
+    withdrawn: number;
+    daily_average: number;
+  };
+  protocol_fees: {
+    total_earned: number;
+    withdrawn: number;
+  };
+  fee_structure: FeeStructure;
+  high_water_mark: number;
+  recent_fee_charges: {
+    timestamp: number;
+    vault_value: number;
+    days_charged: number;
+    management_fee: number;
+    performance_fee: number;
+    protocol_fee: number;
+    total_fee: number;
+    high_water_mark: number;
+  }[];
+  vault_active: boolean;
+}
+
+export async function fetchCreatorDashboard(creatorAddress: string): Promise<CreatorDashboard> {
+  return apiFetch<CreatorDashboard>(`/api/creator/dashboard?creator_address=${encodeURIComponent(creatorAddress)}`);
+}
+
+export async function withdrawCreatorFees(
+  creatorAddress: string,
+  amount?: number
+): Promise<{ status: string; amount: number; remaining_claimable: number; total_earned: number; total_withdrawn: number }> {
+  return apiFetch("/api/creator/withdraw-fees", {
+    method: "POST",
+    body: JSON.stringify({ creator_address: creatorAddress, amount }),
+  });
 }

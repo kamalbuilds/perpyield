@@ -90,35 +90,75 @@ The system continuously monitors exposure drift, funding conditions, and orderbo
 
 ## MCP Configuration
 
-This project includes MCP (Model Context Protocol) integration with Pacifica's documentation:
+This project includes MCP (Model Context Protocol) integration for both Pacifica documentation and TradingView chart analysis:
 
-```json
-{
-  "mcpServers": {
-    "pacifica-docs": {
-      "url": "https://pacifica.gitbook.io/docs/~gitbook/mcp"
-    }
-  }
-}
-```
+### MCP Servers
+
+| Server | Type | Purpose |
+|--------|------|---------|
+| `pacifica-docs` | Remote | Pacifica API documentation access |
+| `tradingview` | Local | TradingView Desktop chart control via CDP |
 
 ### Configuration Files
 
 - **`opencode.json`** - OpenCode configuration with MCP server and agent settings
 - **`.cursor/mcp.json`** - Cursor-specific MCP configuration
 
-### Setup by Tool
+### 1. Pacifica Docs MCP
 
-- **OpenCode**: The `opencode.json` file in the project root contains the MCP configuration
-- **Cursor**: The `.cursor/mcp.json` file is configured. Cursor will automatically detect it.
-- **Claude Desktop**: Add the MCP server to your Claude Desktop configuration at `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-### What the Pacifica MCP Provides
-
+Provides access to Pacifica API documentation:
 - API documentation and endpoints
 - Trading specifications and contract details
 - Integration guides and examples
-- Real-time documentation queries
+
+### 2. TradingView MCP
+
+AI-assisted TradingView chart analysis. Connects Claude to your local TradingView Desktop app.
+
+**Repository**: https://github.com/tradesdontlie/tradingview-mcp
+
+**Prerequisites**:
+- TradingView Desktop app with paid subscription
+- Node.js 18+
+- TradingView must be launched with `--remote-debugging-port=9222`
+
+**Installed Tools** (68 MCP tools):
+- Chart reading: `chart_get_state`, `quote_get`, `data_get_ohlcv`
+- Pine Script development: `pine_set_source`, `pine_smart_compile`, `pine_get_errors`
+- Chart control: `chart_set_symbol`, `chart_set_timeframe`, `chart_manage_indicator`
+- Drawing: `draw_shape`, `draw_list`, `draw_clear`
+- Alerts: `alert_create`, `alert_list`, `alert_delete`
+- Replay mode: `replay_start`, `replay_step`, `replay_trade`
+- Screenshots: `capture_screenshot`
+
+**Quick Start**:
+```bash
+# 1. Launch TradingView with debug port (Mac)
+./tradingview-mcp/scripts/launch_tv_debug_mac.sh
+
+# 2. Or use the MCP tool
+# "Use tv_launch to start TradingView in debug mode"
+
+# 3. Verify connection
+# "Use tv_health_check to verify TradingView is connected"
+```
+
+**CLI Commands**:
+```bash
+# All commands available as 'tv' CLI
+cd tradingview-mcp
+node src/cli/index.js status          # Check connection
+node src/cli/index.js quote           # Get current price
+node src/cli/index.js symbol AAPL     # Change symbol
+node src/cli/index.js screenshot      # Capture chart
+```
+
+**Setup by Tool**:
+- **OpenCode**: The `opencode.json` file contains both MCP configurations
+- **Cursor**: Add to `.cursor/mcp.json`
+- **Claude Desktop**: Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+**Disclaimer**: Not affiliated with TradingView Inc. Requires valid TradingView subscription. All data processing occurs locally.
 
 ## Quick Start
 
