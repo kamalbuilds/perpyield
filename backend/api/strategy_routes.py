@@ -58,6 +58,16 @@ class TPSLRequest(BaseModel):
     sl_price: Optional[str] = None
 
 
+class ClosePositionRequest(BaseModel):
+    symbol: str
+    side: str
+    amount: str
+    close_percent: int = 100
+    order_type: str = "market"
+    limit_price: Optional[str] = None
+    slippage_percent: str = "0.5"
+
+
 def _get_client():
     from main import get_client
     return get_client()
@@ -314,6 +324,36 @@ async def set_tpsl(req: TPSLRequest):
         return result
     except Exception as exc:
         logger.error(f"TP/SL set failed for {req.symbol}: {exc}", exc_info=True)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/api/positions/close")
+async def close_position(req: ClosePositionRequest):
+    client = _get_client()
+    if not client:
+        raise HTTPException(status_code=503, detail="Pacifica client not configured. Set PACIFICA_PRIVATE_KEY in .env")
+    try:
+        close_side = "sell" if req.side.lower() == "long" else "buy"
+        if req.order_type == "limit" and req.limit_price:
+            result = await client.create_limit_order(
+                symbol=req.symbol.upper(),
+                side=close_side,
+                price=req.limit_price,
+                amount=req.amount,
+                reduce_only=True,
+            )
+        else:
+            result = await client.create_market_order(
+                symbol=req.symbol.upper(),
+                side=close_side,
+                amount=req.amount,
+                reduce_only=True,
+                slippage_percent=req.slippage_percent,
+            )
+        logger.info(f"Position closed: {req.symbol} {req.side} {req.close_percent}%")
+        return {"status": "ok", "order": result}
+    except Exception as exc:
+        logger.error(f"Close position failed for {req.symbol}: {exc}", exc_info=True)
         raise HTTPException(status_code=502, detail=str(exc))
 
 

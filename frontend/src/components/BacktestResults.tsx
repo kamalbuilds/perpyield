@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import {
   AreaChart,
@@ -11,6 +11,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import { fetchTradeHistory, type TradeRecord } from "@/lib/api";
 import type { StrategyBacktestResponse } from "@/lib/api";
 
 const STRATEGY_NAMES: Record<string, string> = {
@@ -70,8 +71,32 @@ interface BacktestResultsProps {
 
 export default function BacktestResults({ result, onSave, onCompare }: BacktestResultsProps) {
   const [showTrades, setShowTrades] = useState(false);
+  const [trades, setTrades] = useState<TradeRecord[]>([]);
+  const [tradesLoading, setTradesLoading] = useState(false);
+  const [tradesError, setTradesError] = useState<string | null>(null);
   const bt = result.backtest;
   const color = STRATEGY_COLORS[result.strategy_id] ?? "#00ff88";
+
+  useEffect(() => {
+    if (!showTrades) return;
+    let cancelled = false;
+    setTradesLoading(true);
+    setTradesError(null);
+    fetchTradeHistory(undefined, 100)
+      .then((res) => {
+        if (!cancelled) {
+          const filtered = res.data.filter((t) => t.symbol === result.symbol);
+          setTrades(filtered.length > 0 ? filtered : res.data);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setTradesError(e instanceof Error ? e.message : "Failed to load trades");
+      })
+      .finally(() => {
+        if (!cancelled) setTradesLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [showTrades, result.symbol]);
 
   const isPositiveReturn = bt.total_return_pct >= 0;
   const isPositivePnl = bt.net_pnl >= 0;
@@ -93,20 +118,24 @@ export default function BacktestResults({ result, onSave, onCompare }: BacktestR
   const monthlyReturns = (() => {
     const curve = result.equity_curve_sample ?? [];
     if (curve.length < 2) return [];
-    const step = Math.max(1, Math.floor(curve.length / result.days));
-    const months: { month: string; return_pct: number }[] = [];
     const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    let prev = curve[0].equity ?? 0;
-    const startIdx = Math.floor(step * 0);
-    for (let i = startIdx + step; i < curve.length; i += step) {
-      const curr = curve[i].equity ?? 0;
-      const ret = prev !== 0 ? ((curr - prev) / Math.abs(prev)) * 100 : 0;
-      const mIdx = months.length % 12;
-      months.push({ month: monthNames[mIdx], return_pct: ret });
-      prev = curr;
-      if (months.length >= 6) break;
+    const monthBuckets: { year: number; month: number; startEquity: number; endEquity: number }[] = [];
+    for (const point of curve) {
+      const equity = point.equity ?? 0;
+      const d = new Date(point.timestamp);
+      const year = d.getUTCFullYear();
+      const month = d.getUTCMonth();
+      const last = monthBuckets[monthBuckets.length - 1];
+      if (!last || last.year !== year || last.month !== month) {
+        monthBuckets.push({ year, month, startEquity: equity, endEquity: equity });
+      } else {
+        last.endEquity = equity;
+      }
     }
-    return months;
+    return monthBuckets.map((b) => {
+      const ret = b.startEquity !== 0 ? ((b.endEquity - b.startEquity) / Math.abs(b.startEquity)) * 100 : 0;
+      return { month: monthNames[b.month], return_pct: ret };
+    });
   })();
 
   return (
@@ -276,8 +305,53 @@ export default function BacktestResults({ result, onSave, onCompare }: BacktestR
             transition={{ duration: 0.2 }}
             className="mt-2"
           >
-            <div className="rounded-lg border border-card-border bg-card-bg p-4 text-sm text-muted text-center">
-              Detailed trade history available via API. Run <code className="px-1.5 py-0.5 rounded bg-white/5 font-mono text-xs">GET /api/strategies/{result.strategy_id}/backtest</code> for full breakdown.
+            <div className="rounded-lg border border-card-border bg-card-bg overflow-hidden">
+              {tradesLoading ? (
+                <div className="p-6 text-center text-sm text-muted">
+                  Loading trades...
+                </div>
+              ) : tradesError ? (
+                <div className="p-6 text-center text-sm text-accent-red">{tradesError}</div>
+              ) : trades.length === 0 ? (
+                <div className="p-6 text-center text-sm text-muted">No trade records found.</div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-card-border text-[10px] text-muted uppercase tracking-wider">
+                      <th className="text-left px-4 py-2.5">Time</th>
+                      <th className="text-left px-3 py-2.5">Symbol</th>
+                      <th className="text-left px-3 py-2.5">Side</th>
+                      <th className="text-right px-3 py-2.5">Size</th>
+                      <th className="text-right px-3 py-2.5">Price</th>
+                      <th className="text-right px-3 py-2.5">Fee</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trades.map((t) => {
+                      const isBuy = t.side.toLowerCase() === "buy";
+                      const ts = t.created_at
+                        ? new Date(t.created_at * 1000).toLocaleString(undefined, {
+                            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+                          })
+                        : "-";
+                      return (
+                        <tr key={t.history_id} className="border-b border-card-border/30 hover:bg-white/[0.02]">
+                          <td className="px-4 py-2.5 text-muted font-mono text-xs">{ts}</td>
+                          <td className="px-3 py-2.5 font-mono font-semibold">{t.symbol}</td>
+                          <td className="px-3 py-2.5">
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider ${isBuy ? "bg-accent-green/15 text-accent-green" : "bg-accent-red/15 text-accent-red"}`}>
+                              {t.side.toUpperCase()}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2.5 text-right font-mono">{parseFloat(t.amount).toFixed(4)}</td>
+                          <td className="px-3 py-2.5 text-right font-mono">${parseFloat(t.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="px-3 py-2.5 text-right font-mono text-accent-red">${parseFloat(t.fee).toFixed(2)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
             </div>
           </motion.div>
         )}

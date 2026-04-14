@@ -16,7 +16,10 @@ def _get_client():
 
 def _get_vault_manager():
     from main import get_vault_manager
-    return get_vault_manager()
+    vm = get_vault_manager()
+    if vm is None:
+        return None
+    return vm
 
 
 # ========== Request Models ==========
@@ -112,6 +115,8 @@ async def create_vault(req: CreateVaultRequest):
 async def vault_deposit(req: DepositRequest):
     try:
         vm = _get_vault_manager()
+        if not vm:
+            raise HTTPException(status_code=503, detail="Pacifica client not configured")
         if not vm.state.is_active and vm.state.created_at == 0:
             vm.create_vault()
         result = await vm.deposit(req.user_address, req.amount)
@@ -128,29 +133,14 @@ async def vault_deposit(req: DepositRequest):
 async def vault_withdraw(req: WithdrawRequest):
     try:
         vm = _get_vault_manager()
-        dep = vm.state.depositors.get(req.user_address)
-        if not dep:
-            raise ValueError(f"No deposits found for {req.user_address}")
-        if req.shares > dep.shares:
-            raise ValueError(f"Insufficient shares: have {dep.shares}, requested {req.shares}")
-        share_price = 1.0
-        if vm.state.total_shares > 0 and _get_client().public_key:
-            share_price = await vm.get_share_price()
-        withdrawal_amount = req.shares * share_price
-        dep.shares -= req.shares
-        vm.state.total_shares -= req.shares
-        if dep.shares <= 0.000001:
-            del vm.state.depositors[req.user_address]
-        vm._save_state()
-        return {
-            "depositor": req.user_address,
-            "shares_redeemed": req.shares,
-            "amount_received": withdrawal_amount,
-            "share_price": share_price,
-            "remaining_shares": dep.shares if req.user_address in vm.state.depositors else 0,
-        }
+        if not vm:
+            raise HTTPException(status_code=503, detail="Pacifica client not configured")
+        result = await vm.withdraw(req.user_address, req.shares)
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 

@@ -169,7 +169,7 @@ export async function closePosition(
     slippage_percent?: string;
   }
 ): Promise<ClosePositionResult> {
-  return apiFetch<ClosePositionResult>("/api/v1/orders/close", {
+  return apiFetch<ClosePositionResult>("/api/positions/close", {
     method: "POST",
     body: JSON.stringify({
       symbol,
@@ -209,6 +209,42 @@ export async function setTpsl(
       sl_price: options?.sl_price,
     }),
   });
+}
+
+// ---- Trade History ----
+
+export interface TradeRecord {
+  history_id: number;
+  symbol: string;
+  side: string;
+  amount: string;
+  price: string;
+  fee: string;
+  created_at: number;
+}
+
+export interface TradeHistoryResponse {
+  data: TradeRecord[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+export async function fetchTradeHistory(
+  address?: string,
+  limit: number = 50,
+  cursor?: string
+): Promise<TradeHistoryResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (address) params.set("address", address);
+  if (cursor) params.set("cursor", cursor);
+  const res = await apiFetch<{ success: boolean; data: TradeRecord[]; next_cursor: string | null; has_more: boolean }>(
+    `/api/account/trade-history?${params.toString()}`
+  );
+  return {
+    data: res.data,
+    next_cursor: res.next_cursor,
+    has_more: res.has_more,
+  };
 }
 
 // ---- Backtest ----
@@ -454,6 +490,7 @@ export interface LeaderboardVault {
   tvl: number;
   return_7d: number;
   return_30d: number;
+  return_all: number;
   sharpe_ratio: number;
   clone_count: number;
   follower_count: number;

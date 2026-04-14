@@ -44,6 +44,8 @@ class TPSLRequest(BaseModel):
     side: str
     take_profit: Optional[dict] = None
     stop_loss: Optional[dict] = None
+    tp_price: Optional[str] = None
+    sl_price: Optional[str] = None
 
 
 class ClosePositionRequest(BaseModel):
@@ -145,12 +147,17 @@ async def cancel_all_orders(req: CancelAllRequest):
 
 @router.post("/tpsl")
 async def set_tpsl(req: TPSLRequest):
+    client = _get_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Pacifica client not configured. Set PACIFICA_PRIVATE_KEY in .env")
     try:
-        result = await _get_client().set_tpsl(
+        result = await client.set_tpsl(
             symbol=req.symbol.upper(),
             side=req.side,
             take_profit=req.take_profit,
             stop_loss=req.stop_loss,
+            tp_price=req.tp_price,
+            sl_price=req.sl_price,
         )
         return result
     except Exception as e:

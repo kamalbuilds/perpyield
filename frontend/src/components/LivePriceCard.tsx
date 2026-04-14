@@ -52,7 +52,8 @@ export default function LivePriceCard({
   const price: SymbolPrice | null = prices[symbol] ?? null;
   const priceHistory = history[symbol] ?? [];
   const [hovering, setHovering] = useState(false);
-  const connected = wsStatus === "connected";
+  const connected = wsStatus === "connected" || wsStatus === "polling";
+  const live = wsStatus === "connected";
 
   const markPrice = price?.price ?? 0;
   const change24hPct = price?.change24hPct ?? 0;
@@ -99,10 +100,10 @@ export default function LivePriceCard({
           <span className="flex items-center gap-1.5 text-[10px] text-muted">
             <span
               className={`inline-block w-1.5 h-1.5 rounded-full ${
-                connected ? "bg-accent-green animate-pulse" : "bg-accent-red"
+                live ? "bg-accent-green animate-pulse" : connected ? "bg-yellow-400" : "bg-accent-red"
               }`}
             />
-            {connected ? "LIVE" : "OFFLINE"}
+            {live ? "LIVE" : connected ? "5s" : "OFFLINE"}
           </span>
         </div>
 

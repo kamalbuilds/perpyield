@@ -180,8 +180,8 @@ export default function DashboardPage() {
         />
         <StatCard
           label="Price Feed"
-          value={loading ? null : wsStatus === "connected" ? "Live" : wsStatus === "connecting" ? "Connecting" : "Offline"}
-          accent={wsStatus === "connected" ? "green" : wsStatus === "connecting" ? "yellow" : "red"}
+          value={loading ? null : wsStatus === "connected" ? "Live" : wsStatus === "polling" ? "Polling 5s" : wsStatus === "connecting" ? "Connecting" : "Offline"}
+          accent={wsStatus === "connected" ? "green" : wsStatus === "polling" ? "yellow" : wsStatus === "connecting" ? "yellow" : "red"}
           loading={loading}
         />
       </div>
@@ -239,6 +239,7 @@ export default function DashboardPage() {
                 positions={positions}
                 loading={loading}
                 connected={connected}
+                wsStatus={wsStatus}
                 onClose={handleClose}
                 onAddMargin={handleAddMargin}
                 onTpSl={handleTpSl}

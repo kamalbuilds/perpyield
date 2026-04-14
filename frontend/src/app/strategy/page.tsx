@@ -13,6 +13,7 @@ import {
   type DeltaSummary,
 } from "@/lib/api";
 import { useNotifications } from "@/hooks/useNotifications";
+import ErrorBoundary from "@/components/ErrorBoundary";
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`skeleton ${className ?? ""}`} />;
@@ -41,27 +42,51 @@ export default function StrategyPage() {
     type: "success" | "error";
     text: string;
   } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
+    let errorMsg: string | null = null;
     try {
       const [statusResult, deltaResult] = await Promise.allSettled([
         fetchStrategyStatus(),
         fetchDeltaSummary(),
       ]);
+
       if (statusResult.status === "fulfilled") {
-        const vs = statusResult.value.vault_strategy;
-        setStatus(vs);
-        setRunning(vs.active_positions > 0);
-        setStrategyName(statusResult.value.strategy_name || vs.strategy_name || "");
+        const raw = statusResult.value;
+        if (raw && typeof raw === "object" && raw.vault_strategy) {
+          const vs = raw.vault_strategy;
+          setStatus(vs);
+          setRunning(typeof vs.active_positions === "number" ? vs.active_positions > 0 : false);
+          setStrategyName(raw.strategy_name || vs.strategy_name || "");
+        } else {
+          setStatus((prev) => prev);
+          setRunning(false);
+          errorMsg = "Strategy status returned unexpected format";
+        }
+      } else {
+        const reason = statusResult.reason;
+        errorMsg = reason instanceof Error ? reason.message : "Strategy status unavailable";
       }
+
       if (deltaResult.status === "fulfilled") {
-        setDeltaSummary(deltaResult.value);
-        setDeltaNote(deltaResult.value.note ?? deltaResult.value.delta_tracking ?? null);
+        const delta = deltaResult.value;
+        if (delta && typeof delta === "object") {
+          setDeltaSummary(delta);
+          setDeltaNote(delta.note ?? delta.delta_tracking ?? null);
+        } else {
+          setDeltaSummary(null);
+          if (!errorMsg) errorMsg = "Delta summary returned unexpected format";
+        }
+      } else {
+        const reason = deltaResult.reason;
+        if (!errorMsg) errorMsg = reason instanceof Error ? reason.message : "Delta summary unavailable";
       }
-    } catch {
-      // Silently handle errors on status poll
+    } catch (err) {
+      errorMsg = err instanceof Error ? err.message : "Failed to load strategy data";
     } finally {
       setLoading(false);
+      setLoadError(errorMsg);
     }
   }, []);
 
@@ -164,15 +189,31 @@ export default function StrategyPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold">Strategy</h2>
-        <p className="text-sm text-muted mt-1">
-          Manage vault strategy and deposits
-        </p>
-      </div>
+    <ErrorBoundary>
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-2xl font-bold">Strategy</h2>
+          <p className="text-sm text-muted mt-1">
+            Manage vault strategy and deposits
+          </p>
+        </div>
 
-      {/* Vault Controls */}
+        {loadError && (
+          <div className="rounded-lg border border-accent-red/30 bg-accent-red/5 p-4 flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold text-accent-red">API Error</p>
+              <p className="text-xs text-muted mt-1">{loadError}</p>
+            </div>
+            <button
+              onClick={() => { setLoadError(null); loadData(); }}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/10 text-foreground hover:bg-white/20 transition-colors shrink-0"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Vault Controls */}
       <div className="rounded-lg border border-card-border bg-card-bg p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold">Vault Controls</h3>
@@ -318,7 +359,7 @@ export default function StrategyPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
               <DeltaStatCard
                 label="Positions Tracked"
-                value={`${deltaSummary.positions_tracked}`}
+                value={`${deltaSummary.positions_tracked ?? 0}`}
               />
               <DeltaStatCard
                 label="Needing Rebalance"
@@ -327,7 +368,7 @@ export default function StrategyPage() {
               />
               <DeltaStatCard
                 label="Total Rebalances"
-                value={`${deltaSummary.total_rebalances_executed}`}
+                value={`${deltaSummary.total_rebalances_executed ?? 0}`}
               />
               <DeltaStatCard
                 label="Active Strategy Positions"
@@ -388,6 +429,7 @@ export default function StrategyPage() {
         )}
       </div>
     </div>
+    </ErrorBoundary>
   );
 }
 

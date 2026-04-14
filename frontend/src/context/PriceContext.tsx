@@ -53,7 +53,7 @@ interface PriceHistoryPoint {
   price: number;
 }
 
-export type WsStatus = "connecting" | "connected" | "disconnected";
+export type WsStatus = "connecting" | "connected" | "disconnected" | "polling";
 
 interface PriceState {
   prices: Record<string, SymbolPrice>;
@@ -167,10 +167,12 @@ export function PriceProvider({ children }: { children: ReactNode }) {
   const reconnectAttempts = useRef(0);
   const lastUiUpdate = useRef(0);
   const pendingData = useRef<WsMessage | null>(null);
+  const pendingSource = useRef<"ws" | "poll">("ws");
+  const pollingTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const historyRef = useRef<Record<string, PriceHistoryPoint[]>>({});
   const mountedRef = useRef(true);
 
-  const processMessage = useCallback((msg: WsMessage) => {
+  const processMessage = useCallback((msg: WsMessage, source: "ws" | "poll" = "ws") => {
     if (msg.type === "error") {
       setState((prev) => ({
         ...prev,
@@ -209,12 +211,14 @@ export function PriceProvider({ children }: { children: ReactNode }) {
       }
     }
 
+    const nextStatus: WsStatus = source === "ws" ? "connected" : "polling";
+
     setState((prev) => ({
       ...prev,
       prices: { ...prev.prices, ...newPrices },
       history: { ...history },
       connected: true,
-      wsStatus: "connected",
+      wsStatus: nextStatus,
       lastUpdate: msg.timestamp,
       error: null,
     }));
@@ -223,7 +227,7 @@ export function PriceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const throttleInterval = setInterval(() => {
       if (pendingData.current) {
-        processMessage(pendingData.current);
+        processMessage(pendingData.current, pendingSource.current);
         pendingData.current = null;
         lastUiUpdate.current = Date.now();
       }
@@ -270,6 +274,7 @@ export function PriceProvider({ children }: { children: ReactNode }) {
       ws.onmessage = (e) => {
         try {
           const msg: WsMessage = JSON.parse(e.data);
+          pendingSource.current = "ws";
           pendingData.current = msg;
         } catch {
           // ignore malformed messages
@@ -287,37 +292,45 @@ export function PriceProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const pollPrices = useCallback(async () => {
+    if (!API_BASE) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/market/prices`);
+      if (!res.ok) return;
+      const json = await res.json();
+      const priceList: WsPriceData[] = json.data ?? json;
+      if (Array.isArray(priceList) && priceList.length > 0) {
+        pendingSource.current = "poll";
+        pendingData.current = {
+          type: "price_update",
+          timestamp: Date.now(),
+          prices: priceList,
+          funding_rates: [],
+        };
+      }
+    } catch {
+      // next poll will retry
+    }
+  }, []);
+
   useEffect(() => {
     mountedRef.current = true;
     connect();
 
-    if (API_BASE && Object.keys(state.prices).length === 0) {
-      (async () => {
-        try {
-          const res = await fetch(`${API_BASE}/api/v1/market/prices`);
-          if (!res.ok) return;
-          const json = await res.json();
-          const priceList: WsPriceData[] = json.data ?? json;
-          if (Array.isArray(priceList) && priceList.length > 0) {
-            processMessage({
-              type: "price_update",
-              timestamp: Date.now(),
-              prices: priceList,
-              funding_rates: [],
-            });
-          }
-        } catch {
-          // WS will provide data
-        }
-      })();
-    }
+    pollPrices();
+
+    pollingTimer.current = setInterval(() => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+      pollPrices();
+    }, 5000);
 
     return () => {
       mountedRef.current = false;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      if (pollingTimer.current) clearInterval(pollingTimer.current);
       wsRef.current?.close();
     };
-  }, [connect]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [connect, pollPrices]);
 
   const usePriceFeed = useCallback(
     (symbol: string): SymbolPrice | null => {

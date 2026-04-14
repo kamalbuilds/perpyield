@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 import logging
@@ -167,6 +168,7 @@ class VaultState:
     creator_address: Optional[str] = None
     vault_name: Optional[str] = None
     description: Optional[str] = None
+    lake_address: Optional[str] = None
     performance_history: list = field(default_factory=list)
     social_stats: dict = field(default_factory=dict)
     portfolio_mode: bool = False
@@ -217,6 +219,8 @@ class VaultManager:
         self.rebalance_config = rebalance_config
 
         self.state = self._load_state()
+
+        self._lake_lock = asyncio.Lock()
 
         self.strategy = self._init_strategy()
         self.rebalancer = Rebalancer(client, rebalance_config)
@@ -279,6 +283,7 @@ class VaultManager:
                 creator_address=raw.get("creator_address"),
                 vault_name=raw.get("vault_name"),
                 description=raw.get("description"),
+                lake_address=raw.get("lake_address"),
                 performance_history=raw.get("performance_history", []),
                 social_stats=raw.get("social_stats", {}),
                 portfolio_mode=raw.get("portfolio_mode", False),
@@ -321,6 +326,7 @@ class VaultManager:
             "creator_address": self.state.creator_address,
             "vault_name": self.state.vault_name,
             "description": self.state.description,
+            "lake_address": self.state.lake_address,
             "performance_history": self.state.performance_history[-100:],
             "social_stats": self.state.social_stats,
             "portfolio_mode": self.state.portfolio_mode,
@@ -350,6 +356,22 @@ class VaultManager:
             "strategy_name": STRATEGY_REGISTRY[self.state.strategy_id]["name"],
             "created_at": self.state.created_at,
         }
+
+    async def _ensure_lake(self) -> str:
+        async with self._lake_lock:
+            if self.state.lake_address:
+                return self.state.lake_address
+            if not self.client.public_key:
+                raise RuntimeError("Pacifica client not configured with private key, cannot create lake")
+            nickname = self.state.vault_name or self.vault_id
+            result = await self.client.create_lake(nickname=nickname)
+            lake_addr = result.get("lake") or result.get("lake_address") or result.get("address")
+            if not lake_addr:
+                raise RuntimeError(f"create_lake response missing lake address: {result}")
+            self.state.lake_address = lake_addr
+            self._save_state()
+            logger.info(f"Created Pacifica lake {lake_addr} for vault {self.vault_id}")
+            return lake_addr
 
     async def switch_strategy(self, strategy_id: str, config: Optional[dict] = None) -> dict:
         """Switch vault to a different strategy."""
@@ -475,6 +497,10 @@ class VaultManager:
         if amount <= 0:
             raise ValueError("Deposit amount must be positive")
 
+        lake_address = await self._ensure_lake()
+
+        on_chain_result = await self.client.deposit_to_lake(lake_address, str(amount))
+
         share_price = await self.get_share_price()
         new_shares = amount / share_price
 
@@ -494,7 +520,9 @@ class VaultManager:
         self.state.total_deposited += amount
         self._save_state()
 
-        logger.info(f"Deposit: {depositor_address} deposited ${amount:.2f}, received {new_shares:.6f} shares")
+        tx_signature = on_chain_result.get("signature") or on_chain_result.get("tx_signature") or on_chain_result.get("txid")
+
+        logger.info(f"Deposit: {depositor_address} deposited ${amount:.2f}, received {new_shares:.6f} shares, tx={tx_signature}")
         return {
             "depositor": depositor_address,
             "amount": amount,
@@ -503,6 +531,9 @@ class VaultManager:
             "total_shares": self.state.depositors[depositor_address].shares,
             "strategy_id": self.state.strategy_id,
             "strategy_name": STRATEGY_REGISTRY[self.state.strategy_id]["name"],
+            "lake_address": lake_address,
+            "on_chain_result": on_chain_result,
+            "tx_signature": tx_signature,
         }
 
     async def withdraw(self, depositor_address: str, shares_to_redeem: Optional[float] = None) -> dict:
@@ -515,6 +546,10 @@ class VaultManager:
 
         if shares_to_redeem > dep.shares:
             raise ValueError(f"Insufficient shares: have {dep.shares}, requested {shares_to_redeem}")
+
+        lake_address = await self._ensure_lake()
+
+        on_chain_result = await self.client.withdraw_from_lake(lake_address, str(shares_to_redeem))
 
         share_price = await self.get_share_price()
         withdrawal_amount = shares_to_redeem * share_price
@@ -531,9 +566,11 @@ class VaultManager:
 
         self._save_state()
 
+        tx_signature = on_chain_result.get("signature") or on_chain_result.get("tx_signature") or on_chain_result.get("txid")
+
         logger.info(
             f"Withdrawal: {depositor_address} redeemed {shares_to_redeem:.6f} shares "
-            f"for ${withdrawal_amount:.2f}"
+            f"for ${withdrawal_amount:.2f}, tx={tx_signature}"
         )
         return {
             "depositor": depositor_address,
@@ -541,6 +578,9 @@ class VaultManager:
             "amount_received": withdrawal_amount,
             "share_price": share_price,
             "remaining_shares": dep.shares if depositor_address in self.state.depositors else 0,
+            "lake_address": lake_address,
+            "on_chain_result": on_chain_result,
+            "tx_signature": tx_signature,
         }
 
     async def _close_proportional_positions(self, fraction: float):

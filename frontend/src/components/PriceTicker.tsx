@@ -122,7 +122,8 @@ function TickerItem({ item }: { item: TickerItem }) {
 
 export default function PriceTicker() {
   const { prices, wsStatus } = usePrices();
-  const connected = wsStatus === "connected";
+  const connected = wsStatus === "connected" || wsStatus === "polling";
+  const live = wsStatus === "connected";
   const [fallbackRates, setFallbackRates] = useState<Record<string, FundingRateEntry>>({});
   const [loaded, setLoaded] = useState(false);
 
@@ -176,10 +177,10 @@ export default function PriceTicker() {
         <span className="flex items-center gap-1.5 text-[10px] text-muted">
           <span
             className={`inline-block w-1.5 h-1.5 rounded-full ${
-              connected ? "bg-accent-green animate-pulse" : "bg-accent-red"
+              live ? "bg-accent-green animate-pulse" : connected ? "bg-yellow-400" : "bg-accent-red"
             }`}
           />
-          {connected ? "LIVE" : "OFFLINE"}
+          {live ? "LIVE" : connected ? "5s" : "OFFLINE"}
         </span>
       </div>
       <div className="ticker-scroll flex items-center h-10 -mt-5">

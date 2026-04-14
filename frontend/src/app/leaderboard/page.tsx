@@ -65,7 +65,7 @@ export default function LeaderboardPage() {
   const getReturnValue = (vault: LeaderboardVault) => {
     if (period === "7d") return vault.return_7d;
     if (period === "30d") return vault.return_30d;
-    return vault.return_30d;
+    return vault.return_all;
   };
 
   return (

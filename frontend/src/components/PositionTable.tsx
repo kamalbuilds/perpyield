@@ -1,7 +1,10 @@
 "use client";
 
-import { motion, AnimatePresence } from "framer-motion";
+import { useState, useCallback } from "react";
+import React from "react";
+import { motion } from "framer-motion";
 import type { EnrichedPosition } from "@/hooks/usePositions";
+import { fetchTradeHistory, type TradeRecord } from "@/lib/api";
 
 const SYMBOL_ICONS: Record<string, { color: string; letter: string }> = {
   BTC: { color: "#f7931a", letter: "₿" },
@@ -70,6 +73,7 @@ interface PositionTableProps {
   positions: EnrichedPosition[];
   loading: boolean;
   connected: boolean;
+  wsStatus: "connecting" | "connected" | "disconnected" | "polling";
   onClose: (position: EnrichedPosition) => void;
   onAddMargin: (position: EnrichedPosition) => void;
   onTpSl: (position: EnrichedPosition) => void;
@@ -79,10 +83,35 @@ export default function PositionTable({
   positions,
   loading,
   connected,
+  wsStatus,
   onClose,
   onAddMargin,
   onTpSl,
 }: PositionTableProps) {
+  const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
+  const [expandedTrades, setExpandedTrades] = useState<TradeRecord[]>([]);
+  const [tradesLoading, setTradesLoading] = useState(false);
+  const [tradesError, setTradesError] = useState<string | null>(null);
+
+  const toggleTrades = useCallback(async (symbol: string) => {
+    if (expandedSymbol === symbol) {
+      setExpandedSymbol(null);
+      setExpandedTrades([]);
+      return;
+    }
+    setExpandedSymbol(symbol);
+    setTradesLoading(true);
+    setTradesError(null);
+    try {
+      const res = await fetchTradeHistory(undefined, 100);
+      const filtered = res.data.filter((t) => t.symbol === symbol);
+      setExpandedTrades(filtered.length > 0 ? filtered : res.data.slice(0, 20));
+    } catch (e) {
+      setTradesError(e instanceof Error ? e.message : "Failed to load trades");
+    } finally {
+      setTradesLoading(false);
+    }
+  }, [expandedSymbol]);
   if (loading) {
     return (
       <div className="rounded-lg border border-card-border bg-card-bg overflow-hidden">
@@ -124,8 +153,8 @@ export default function PositionTable({
         <div className="flex items-center gap-3">
           <h3 className="text-sm font-semibold">Active Positions</h3>
           <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${connected ? "bg-accent-green pulse-dot" : "bg-muted"}`} />
-            <span className="text-[10px] text-muted font-mono">{connected ? "LIVE" : "OFFLINE"}</span>
+            <div className={`w-1.5 h-1.5 rounded-full ${wsStatus === "connected" ? "bg-accent-green pulse-dot" : wsStatus === "polling" ? "bg-yellow-400" : "bg-muted"}`} />
+            <span className="text-[10px] text-muted font-mono">{wsStatus === "connected" ? "LIVE" : wsStatus === "polling" ? "5s" : "OFFLINE"}</span>
           </div>
         </div>
         <span className="text-xs text-muted">{positions.length} position{positions.length !== 1 ? "s" : ""}</span>
@@ -148,10 +177,9 @@ export default function PositionTable({
             </tr>
           </thead>
           <tbody>
-            <AnimatePresence>
-              {positions.map((pos, i) => (
+            {positions.map((pos, i) => (
+              <React.Fragment key={`${pos.symbol}-${pos.side}-${i}`}>
                 <motion.tr
-                  key={`${pos.symbol}-${pos.side}-${i}`}
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, x: -20 }}
@@ -191,6 +219,12 @@ export default function PositionTable({
                   <td className="px-5 py-3.5 text-right">
                     <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
+                        onClick={() => toggleTrades(pos.symbol)}
+                        className={`px-2 py-1 rounded text-[10px] font-medium transition-colors ${expandedSymbol === pos.symbol ? "bg-accent-green/15 text-accent-green" : "bg-white/5 text-muted hover:bg-white/10 hover:text-foreground"}`}
+                      >
+                        Trades
+                      </button>
+                      <button
                         onClick={() => onClose(pos)}
                         className="px-2 py-1 rounded text-[10px] font-medium bg-accent-red/10 text-accent-red hover:bg-accent-red/20 transition-colors"
                       >
@@ -211,8 +245,58 @@ export default function PositionTable({
                     </div>
                   </td>
                 </motion.tr>
-              ))}
-            </AnimatePresence>
+                {expandedSymbol === pos.symbol && (
+                  <tr key={`trades-${pos.symbol}`}>
+                    <td colSpan={10} className="px-5 py-0">
+                      <div className="my-2 rounded-lg border border-card-border bg-card-bg overflow-hidden">
+                        {tradesLoading ? (
+                          <div className="p-4 text-center text-xs text-muted">Loading trades...</div>
+                        ) : tradesError ? (
+                          <div className="p-4 text-center text-xs text-accent-red">{tradesError}</div>
+                        ) : expandedTrades.length === 0 ? (
+                          <div className="p-4 text-center text-xs text-muted">No trades found for {pos.symbol}</div>
+                        ) : (
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="border-b border-card-border text-[9px] text-muted uppercase tracking-wider">
+                                <th className="text-left px-3 py-2">Time</th>
+                                <th className="text-left px-2 py-2">Side</th>
+                                <th className="text-right px-2 py-2">Size</th>
+                                <th className="text-right px-2 py-2">Price</th>
+                                <th className="text-right px-3 py-2">Fee</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {expandedTrades.map((t) => {
+                                const isBuy = t.side.toLowerCase() === "buy";
+                                const ts = t.created_at
+                                  ? new Date(t.created_at * 1000).toLocaleString(undefined, {
+                                      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+                                    })
+                                  : "-";
+                                return (
+                                  <tr key={t.history_id} className="border-b border-card-border/20">
+                                    <td className="px-3 py-1.5 text-muted font-mono">{ts}</td>
+                                    <td className="px-2 py-1.5">
+                                      <span className={`px-1 py-0.5 rounded text-[8px] font-bold ${isBuy ? "bg-accent-green/15 text-accent-green" : "bg-accent-red/15 text-accent-red"}`}>
+                                        {t.side.toUpperCase()}
+                                      </span>
+                                    </td>
+                                    <td className="px-2 py-1.5 text-right font-mono">{parseFloat(t.amount).toFixed(4)}</td>
+                                    <td className="px-2 py-1.5 text-right font-mono">${parseFloat(t.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                    <td className="px-3 py-1.5 text-right font-mono text-accent-red">${parseFloat(t.fee).toFixed(2)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
+            ))}
           </tbody>
         </table>
       </div>

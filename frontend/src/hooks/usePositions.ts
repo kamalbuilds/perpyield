@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchPositions, type PositionsResponse, type PositionEntry, type LivePosition } from "@/lib/api";
-import { usePrices } from "@/context/PriceContext";
+import { usePrices, type WsStatus } from "@/context/PriceContext";
 
 export interface EnrichedPosition extends PositionEntry {
   mark_price: number;
@@ -19,7 +19,7 @@ export interface UsePositionsReturn {
   loading: boolean;
   error: string | null;
   connected: boolean;
-  wsStatus: "connecting" | "connected" | "disconnected";
+  wsStatus: WsStatus;
   totalUnrealizedPnl: number;
   totalFundingEarned: number;
   activeCount: number;

@@ -151,6 +151,7 @@ async def _enrich_featured_vaults() -> list[dict]:
                     pass
             fv["return_7d"] = 0.0
             fv["return_30d"] = 0.0
+            fv["return_all"] = 0.0
             fv["sharpe_ratio"] = 0.0
             continue
 
@@ -174,6 +175,11 @@ async def _enrich_featured_vaults() -> list[dict]:
             deposited = fv.get("total_deposited", 0)
             current = history[-1].get("vault_value", deposited)
             fv["return_30d"] = ((current - deposited) / deposited * 100) if deposited > 0 else 0.0
+
+        deposited = fv.get("total_deposited", 0)
+        first_val = history[0].get("vault_value", deposited)
+        last_val = history[-1].get("vault_value", deposited)
+        fv["return_all"] = ((last_val - first_val) / first_val * 100) if first_val > 0 else 0.0
 
         fv["sharpe_ratio"] = _compute_sharpe(history)
 
@@ -204,8 +210,9 @@ async def vault_leaderboard(
 ):
     vaults = await _enrich_featured_vaults()
 
+    period_return_key = {"7d": "return_7d", "30d": "return_30d", "all": "return_all"}.get(period, "return_7d")
     sort_key_map = {
-        "return": "return_7d" if period == "7d" else "return_30d",
+        "return": period_return_key,
         "sharpe": "sharpe_ratio",
         "tvl": "total_deposited",
         "clones": "clone_count",
@@ -216,7 +223,7 @@ async def vault_leaderboard(
 
     ranked = []
     for idx, v in enumerate(vaults):
-        return_val = v.get("return_7d", 0) if period == "7d" else v.get("return_30d", 0)
+        return_val = v.get(period_return_key, 0)
         entry = {
             "rank": idx + 1,
             "vault_id": v["vault_id"],
@@ -228,6 +235,7 @@ async def vault_leaderboard(
             "tvl": v.get("total_deposited", 0),
             "return_7d": round(v.get("return_7d", 0), 2),
             "return_30d": round(v.get("return_30d", 0), 2),
+            "return_all": round(v.get("return_all", 0), 2),
             "sharpe_ratio": round(v.get("sharpe_ratio", 0), 2),
             "clone_count": v.get("clone_count", 0),
             "follower_count": v.get("follower_count", 0),
