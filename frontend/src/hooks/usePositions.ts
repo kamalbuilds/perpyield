@@ -83,11 +83,22 @@ export function usePositions(): UsePositionsReturn {
     return () => clearInterval(interval);
   }, [loadPositions]);
 
-  const positions = (rawResponse?.strategy_positions?.positions ?? []).map((p) => {
+  // Map strategy positions
+  const strategyPositions = (rawResponse?.strategy_positions?.positions ?? []).map((p) => {
     const wsPrice = prices[p.symbol];
     const markPrice = wsPrice?.price ?? p.entry_price;
     return enrichPosition(p, markPrice);
   });
+
+  // Map live positions from Pacifica
+  const livePositions = (rawResponse?.live_positions ?? []).map((p) => {
+    const wsPrice = prices[p.symbol];
+    const markPrice = wsPrice?.price ?? parseFloat(p.mark_price || "0") || p.entry_price;
+    return enrichPosition(p, markPrice);
+  });
+
+  // Combine both - prefer live positions if they exist
+  const positions = livePositions.length > 0 ? livePositions : strategyPositions;
 
   const totalUnrealizedPnl = positions.reduce((sum, p) => sum + p.unrealized_pnl, 0);
   const totalFundingEarned = rawResponse?.strategy_positions?.total_funding_earned ?? 0;
