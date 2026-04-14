@@ -36,4 +36,4 @@ ENV HOST=0.0.0.0
 ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--loop", "uvloop", "--http", "httptools"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
