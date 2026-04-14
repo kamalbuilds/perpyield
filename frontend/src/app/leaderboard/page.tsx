@@ -7,7 +7,7 @@ import { fetchLeaderboard, type LeaderboardVault } from "@/lib/api";
 const PERIODS = [
   { value: "7d", label: "7 Days" },
   { value: "30d", label: "30 Days" },
-  { value: "90d", label: "90 Days" },
+  { value: "all", label: "All Time" },
 ];
 
 const SORT_OPTIONS = [
@@ -65,7 +65,7 @@ export default function LeaderboardPage() {
   const getReturnValue = (vault: LeaderboardVault) => {
     if (period === "7d") return vault.return_7d;
     if (period === "30d") return vault.return_30d;
-    return vault.return_7d; // fallback
+    return vault.return_30d;
   };
 
   return (
