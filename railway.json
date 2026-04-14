@@ -5,7 +5,7 @@
     "dockerfilePath": "docker/Dockerfile"
   },
   "deploy": {
-    "startCommand": "uvicorn main:app --host 0.0.0.0 --port $PORT --workers 2 --loop uvloop --http httptools",
+    "startCommand": "cd /app && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}",
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 90,
     "restartPolicyType": "ON_FAILURE",
