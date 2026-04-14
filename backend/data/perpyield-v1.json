@@ -1,0 +1,11 @@
+{
+  "vault_id": "perpyield-v1",
+  "total_shares": 0.0,
+  "total_deposited": 0.0,
+  "total_funding_earned": 0,
+  "total_fees_paid": 0.0,
+  "depositors": {},
+  "created_at": 0,
+  "updated_at": 1776089498173,
+  "is_active": true
+}
