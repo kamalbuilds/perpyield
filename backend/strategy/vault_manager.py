@@ -3,13 +3,80 @@ import time
 import logging
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Type
 
 from pacifica.client import PacificaClient, sf
 from strategy.delta_neutral import DeltaNeutralStrategy, StrategyConfig
+from strategy.momentum_swing import MomentumSwingStrategy, MomentumConfig
+from strategy.mean_reversion import MeanReversionStrategy, MeanReversionConfig
+from strategy.volatility_breakout import VolatilityBreakoutStrategy, VolatilityBreakoutConfig
 from strategy.rebalancer import Rebalancer, RebalanceConfig
 
 logger = logging.getLogger(__name__)
+
+
+# Strategy Registry - Maps strategy IDs to their classes and configs
+STRATEGY_REGISTRY = {
+    "delta_neutral": {
+        "name": "Delta Neutral (Funding Arbitrage)",
+        "class": DeltaNeutralStrategy,
+        "config_class": StrategyConfig,
+        "description": "Earn funding rate payments by shorting high-funding assets",
+        "indicators": ["Funding Rate", "Funding History"],
+        "risk_level": "Low",
+        "expected_apy": "5-20%",
+    },
+    "momentum_swing": {
+        "name": "Momentum Swing",
+        "class": MomentumSwingStrategy,
+        "config_class": MomentumConfig,
+        "description": "Trend-following strategy using EMA crossover + RSI + MACD",
+        "indicators": ["EMA", "RSI", "MACD"],
+        "risk_level": "Medium",
+        "expected_apy": "15-50%",
+    },
+    "mean_reversion": {
+        "name": "Mean Reversion",
+        "class": MeanReversionStrategy,
+        "config_class": MeanReversionConfig,
+        "description": "Counter-trend strategy using Bollinger Bands + RSI",
+        "indicators": ["Bollinger Bands", "RSI", "SMA"],
+        "risk_level": "Medium",
+        "expected_apy": "10-40%",
+    },
+    "volatility_breakout": {
+        "name": "Volatility Breakout",
+        "class": VolatilityBreakoutStrategy,
+        "config_class": VolatilityBreakoutConfig,
+        "description": "Breakout strategy using ATR + volume confirmation",
+        "indicators": ["ATR", "Volume", "Support/Resistance"],
+        "risk_level": "High",
+        "expected_apy": "20-80%",
+    },
+}
+
+
+def get_strategy_class(strategy_id: str):
+    """Get strategy class by ID."""
+    entry = STRATEGY_REGISTRY.get(strategy_id)
+    if entry:
+        return entry["class"], entry["config_class"]
+    return None, None
+
+
+def list_available_strategies() -> list[dict]:
+    """List all available strategies for the marketplace."""
+    return [
+        {
+            "id": sid,
+            "name": data["name"],
+            "description": data["description"],
+            "indicators": data["indicators"],
+            "risk_level": data["risk_level"],
+            "expected_apy": data["expected_apy"],
+        }
+        for sid, data in STRATEGY_REGISTRY.items()
+    ]
 
 
 @dataclass
@@ -18,6 +85,15 @@ class Depositor:
     shares: float
     deposited_amount: float
     deposit_time: int
+
+
+@dataclass
+class VaultSocialStats:
+    clone_count: int = 0
+    follower_count: int = 0
+    view_count: int = 0
+    weekly_depositors: int = 0
+    created_at: int = 0
 
 
 @dataclass
@@ -31,9 +107,28 @@ class VaultState:
     created_at: int = 0
     updated_at: int = 0
     is_active: bool = True
+    strategy_id: str = "delta_neutral"  # Default strategy
+    strategy_config: dict = field(default_factory=dict)
+    cloned_from: Optional[str] = None
+    clone_count: int = 0
+    creator_address: Optional[str] = None
+    vault_name: Optional[str] = None
+    description: Optional[str] = None
+    performance_history: list = field(default_factory=list)
+    social_stats: dict = field(default_factory=dict)
 
 
 class VaultManager:
+    """
+    Multi-Strategy Vault Manager
+
+    Supports multiple trading strategies:
+    - delta_neutral: Funding rate arbitrage
+    - momentum_swing: Trend following
+    - mean_reversion: Bollinger Bands mean reversion
+    - volatility_breakout: ATR-based breakout
+    """
+
     def __init__(
         self,
         client: PacificaClient,
@@ -47,11 +142,31 @@ class VaultManager:
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.state_file = self.state_dir / f"{vault_id}.json"
-
-        self.strategy = DeltaNeutralStrategy(client, strategy_config)
-        self.rebalancer = Rebalancer(client, rebalance_config)
+        self.rebalance_config = rebalance_config
 
         self.state = self._load_state()
+
+        # Initialize strategy based on stored preference
+        self.strategy = self._init_strategy()
+        self.rebalancer = Rebalancer(client, rebalance_config)
+
+    def _init_strategy(self):
+        """Initialize strategy based on vault's strategy_id."""
+        strategy_id = self.state.strategy_id
+        strategy_class, config_class = get_strategy_class(strategy_id)
+
+        if strategy_class is None:
+            logger.warning(f"Unknown strategy {strategy_id}, defaulting to delta_neutral")
+            strategy_id = "delta_neutral"
+            strategy_class, config_class = get_strategy_class(strategy_id)
+            self.state.strategy_id = strategy_id
+
+        # Load saved config or use defaults
+        config_kwargs = self.state.strategy_config if self.state.strategy_config else {}
+        config = config_class(**config_kwargs) if config_kwargs else config_class()
+
+        logger.info(f"Initialized {strategy_id} strategy for vault {self.vault_id}")
+        return strategy_class(self.client, config)
 
     def _load_state(self) -> VaultState:
         if self.state_file.exists():
@@ -69,6 +184,15 @@ class VaultManager:
                 created_at=raw["created_at"],
                 updated_at=raw["updated_at"],
                 is_active=raw.get("is_active", True),
+                strategy_id=raw.get("strategy_id", "delta_neutral"),
+                strategy_config=raw.get("strategy_config", {}),
+                cloned_from=raw.get("cloned_from"),
+                clone_count=raw.get("clone_count", 0),
+                creator_address=raw.get("creator_address"),
+                vault_name=raw.get("vault_name"),
+                description=raw.get("description"),
+                performance_history=raw.get("performance_history", []),
+                social_stats=raw.get("social_stats", {}),
             )
         return VaultState(vault_id=self.vault_id)
 
@@ -84,23 +208,149 @@ class VaultManager:
             "created_at": self.state.created_at,
             "updated_at": self.state.updated_at,
             "is_active": self.state.is_active,
+            "strategy_id": self.state.strategy_id,
+            "strategy_config": self.state.strategy_config,
+            "cloned_from": self.state.cloned_from,
+            "clone_count": self.state.clone_count,
+            "creator_address": self.state.creator_address,
+            "vault_name": self.state.vault_name,
+            "description": self.state.description,
+            "performance_history": self.state.performance_history[-100:],
+            "social_stats": self.state.social_stats,
         }
         self.state_file.write_text(json.dumps(data, indent=2))
 
-    def create_vault(self) -> dict:
+    def create_vault(self, name: Optional[str] = None, description: Optional[str] = None, creator: Optional[str] = None) -> dict:
         if self.state.created_at > 0:
             return {"status": "already_exists", "vault_id": self.vault_id}
         self.state.created_at = int(time.time() * 1000)
+        if name:
+            self.state.vault_name = name
+        if description:
+            self.state.description = description
+        if creator:
+            self.state.creator_address = creator
         self._save_state()
-        logger.info(f"Vault {self.vault_id} created")
-        return {"status": "created", "vault_id": self.vault_id, "created_at": self.state.created_at}
+        logger.info(f"Vault {self.vault_id} created with strategy {self.state.strategy_id}")
+        return {
+            "status": "created",
+            "vault_id": self.vault_id,
+            "strategy_id": self.state.strategy_id,
+            "strategy_name": STRATEGY_REGISTRY[self.state.strategy_id]["name"],
+            "created_at": self.state.created_at,
+        }
+
+    async def switch_strategy(self, strategy_id: str, config: Optional[dict] = None) -> dict:
+        """Switch vault to a different strategy."""
+        if strategy_id not in STRATEGY_REGISTRY:
+            raise ValueError(f"Unknown strategy: {strategy_id}. Available: {list(STRATEGY_REGISTRY.keys())}")
+
+        # Close existing positions before switching
+        if hasattr(self.strategy, 'active_positions') and self.strategy.active_positions:
+            logger.info(f"Closing {len(self.strategy.active_positions)} positions before strategy switch")
+            for symbol in list(self.strategy.active_positions.keys()):
+                try:
+                    await self._close_position(symbol)
+                except Exception as e:
+                    logger.error(f"Failed to close {symbol}: {e}")
+
+        # Update state
+        self.state.strategy_id = strategy_id
+        self.state.strategy_config = config or {}
+
+        # Reinitialize strategy
+        self.strategy = self._init_strategy()
+        self._save_state()
+
+        logger.info(f"Switched vault {self.vault_id} to {strategy_id}")
+        return {
+            "status": "switched",
+            "vault_id": self.vault_id,
+            "strategy_id": strategy_id,
+            "strategy_name": STRATEGY_REGISTRY[strategy_id]["name"],
+        }
+
+    def clone_vault(self, new_vault_id: str, cloner_address: str) -> dict:
+        """Clone this vault's configuration to a new vault."""
+        self.state.clone_count += 1
+        self._save_state()
+
+        # Return clone configuration
+        return {
+            "status": "clone_template_created",
+            "template": {
+                "vault_id": new_vault_id,
+                "strategy_id": self.state.strategy_id,
+                "strategy_config": self.state.strategy_config,
+                "cloned_from": self.vault_id,
+                "creator_address": cloner_address,
+                "strategy_name": STRATEGY_REGISTRY[self.state.strategy_id]["name"],
+            }
+        }
+
+    async def _close_position(self, symbol: str):
+        """Close a position for strategy switch."""
+        if hasattr(self.strategy, 'exit_position'):
+            await self.strategy.exit_position(symbol)
+        elif hasattr(self.strategy, 'active_positions'):
+            pos = self.strategy.active_positions.get(symbol)
+            if pos:
+                side = "bid" if pos.side == "short" else "ask"
+                await self.client.create_market_order(
+                    symbol=symbol,
+                    side=side,
+                    amount=f"{pos.size:.6f}",
+                    slippage_percent="0.5",
+                    reduce_only=True,
+                )
 
     async def get_total_vault_value(self) -> float:
+        """
+        Calculate vault value based on deposits and trading PnL.
+
+        Instead of using total account equity (which includes non-vault funds),
+        we calculate: vault_value = total_deposited + unrealized_pnl_from_positions
+
+        This gives accurate share pricing for vault-specific performance.
+        """
         if not self.client.public_key:
             return self.state.total_deposited
-        account = await self.client.get_account()
-        equity = sf(account.account_equity)
-        return equity if equity > 0 else self.state.total_deposited
+
+        # Start with total deposits
+        base_value = self.state.total_deposited
+
+        # Calculate unrealized PnL from active positions
+        unrealized_pnl = 0.0
+
+        if hasattr(self.strategy, 'active_positions'):
+            try:
+                positions = await self.client.get_positions()
+                prices = await self.client.get_prices()
+                price_map = {p.symbol: sf(p.mark) for p in prices}
+
+                for symbol, pos in self.strategy.active_positions.items():
+                    current_price = price_map.get(symbol, 0)
+                    if current_price > 0 and hasattr(pos, 'entry_price'):
+                        # Calculate PnL for this position
+                        if hasattr(pos, 'side') or hasattr(pos, 'direction'):
+                            # For strategies with direction/side
+                            direction = 1 if (getattr(pos, 'side', '') == 'long' or
+                                            str(getattr(pos, 'direction', '')).lower() == 'bullish') else -1
+
+                            price_diff = (current_price - pos.entry_price) * direction
+                            position_value = getattr(pos, 'size', 0) * pos.entry_price
+                            position_pnl = getattr(pos, 'size', 0) * price_diff
+                            unrealized_pnl += position_pnl
+            except Exception as e:
+                logger.warning(f"Could not calculate position PnL: {e}")
+
+        # Add any accumulated funding earned
+        realized_earnings = self.state.total_funding_earned - self.state.total_fees_paid
+
+        vault_value = base_value + unrealized_pnl + realized_earnings
+
+        # Ensure vault value doesn't go negative
+        return max(0, vault_value)
 
     async def get_share_price(self) -> float:
         if self.state.total_shares <= 0:
@@ -140,6 +390,8 @@ class VaultManager:
             "shares_received": new_shares,
             "share_price": share_price,
             "total_shares": self.state.depositors[depositor_address].shares,
+            "strategy_id": self.state.strategy_id,
+            "strategy_name": STRATEGY_REGISTRY[self.state.strategy_id]["name"],
         }
 
     async def withdraw(self, depositor_address: str, shares_to_redeem: Optional[float] = None) -> dict:
@@ -181,30 +433,42 @@ class VaultManager:
         }
 
     async def _close_proportional_positions(self, fraction: float):
-        for symbol, pos in list(self.strategy.active_positions.items()):
-            close_size = pos.size * fraction
-            if close_size <= 0:
-                continue
-            try:
-                close_side = "bid" if pos.side == "short" else "ask"
-                await self.client.create_market_order(
-                    symbol=symbol,
-                    side=close_side,
-                    amount=f"{close_size:.6f}",
-                    slippage_percent="0.5",
-                    reduce_only=True,
-                )
-                pos.size -= close_size
-                logger.info(f"Closed {fraction*100:.1f}% of {symbol} position for withdrawal")
-            except Exception as e:
-                logger.error(f"Failed to close proportional position {symbol}: {e}")
+        if hasattr(self.strategy, 'active_positions'):
+            for symbol, pos in list(self.strategy.active_positions.items()):
+                close_size = pos.size * fraction
+                if close_size <= 0:
+                    continue
+                try:
+                    if hasattr(pos, 'side'):
+                        close_side = "bid" if pos.side == "short" else "ask"
+                    elif hasattr(pos, 'direction'):
+                        from strategy.momentum_swing import TrendDirection
+                        close_side = "ask" if pos.direction == TrendDirection.BULLISH else "bid"
+                    else:
+                        continue
+
+                    await self.client.create_market_order(
+                        symbol=symbol,
+                        side=close_side,
+                        amount=f"{close_size:.6f}",
+                        slippage_percent="0.5",
+                        reduce_only=True,
+                    )
+                    pos.size -= close_size
+                    logger.info(f"Closed {fraction*100:.1f}% of {symbol} position for withdrawal")
+                except Exception as e:
+                    logger.error(f"Failed to close proportional position {symbol}: {e}")
 
     async def calculate_pnl(self) -> dict:
         vault_value = await self.get_total_vault_value()
         total_deposited = self.state.total_deposited
 
         strategy_status = self.strategy.get_status()
-        funding_earned = strategy_status.get("total_funding_earned", 0.0)
+        # Different strategies track different metrics
+        if hasattr(strategy_status, 'total_funding_earned'):
+            funding_earned = strategy_status.get("total_funding_earned", 0.0)
+        else:
+            funding_earned = 0.0
 
         net_pnl = vault_value - total_deposited
         pnl_pct = (net_pnl / total_deposited * 100) if total_deposited > 0 else 0.0
@@ -215,6 +479,15 @@ class VaultManager:
         annualized_return = (pnl_pct / age_hours * 8760) if age_hours > 1 else 0.0
 
         self.state.total_funding_earned = funding_earned
+
+        # Record performance history
+        self.state.performance_history.append({
+            "timestamp": int(time.time() * 1000),
+            "vault_value": vault_value,
+            "net_pnl": net_pnl,
+            "pnl_pct": pnl_pct,
+        })
+
         self._save_state()
 
         share_price = await self.get_share_price()
@@ -233,11 +506,21 @@ class VaultManager:
         }
 
     async def run_strategy_cycle(self) -> dict:
+        """Run one strategy cycle."""
         strategy_result = await self.strategy.run_cycle()
-        rebalance_result = await self.rebalancer.run_check()
+
+        # Only run rebalancer for delta_neutral strategy
+        if self.state.strategy_id == "delta_neutral":
+            rebalance_result = await self.rebalancer.run_check()
+        else:
+            rebalance_result = []
+
         pnl = await self.calculate_pnl()
+
         return {
             "strategy": strategy_result,
+            "strategy_id": self.state.strategy_id,
+            "strategy_name": STRATEGY_REGISTRY[self.state.strategy_id]["name"],
             "rebalances": rebalance_result,
             "pnl": pnl,
             "timestamp": int(time.time() * 1000),
@@ -245,8 +528,12 @@ class VaultManager:
 
     async def get_vault_info(self) -> dict:
         pnl = await self.calculate_pnl()
+        strategy_info = STRATEGY_REGISTRY.get(self.state.strategy_id, {})
+
         return {
             "vault_id": self.vault_id,
+            "vault_name": self.state.vault_name,
+            "description": self.state.description,
             "is_active": self.state.is_active,
             "created_at": self.state.created_at,
             "total_deposited": self.state.total_deposited,
@@ -257,5 +544,17 @@ class VaultManager:
             "pnl_pct": pnl["pnl_pct"],
             "annualized_return": pnl["annualized_return"],
             "depositor_count": len(self.state.depositors),
-            "active_positions": len(self.strategy.active_positions),
+            "active_positions": len(getattr(self.strategy, 'active_positions', {})),
+            "strategy": {
+                "id": self.state.strategy_id,
+                "name": strategy_info.get("name", "Unknown"),
+                "description": strategy_info.get("description", ""),
+                "indicators": strategy_info.get("indicators", []),
+                "risk_level": strategy_info.get("risk_level", "Unknown"),
+                "expected_apy": strategy_info.get("expected_apy", "Unknown"),
+            },
+            "creator": self.state.creator_address,
+            "cloned_from": self.state.cloned_from,
+            "clone_count": self.state.clone_count,
+            "social_stats": self.state.social_stats,
         }
