@@ -19,6 +19,7 @@ export interface UsePositionsReturn {
   loading: boolean;
   error: string | null;
   connected: boolean;
+  wsStatus: "connecting" | "connected" | "disconnected";
   totalUnrealizedPnl: number;
   totalFundingEarned: number;
   activeCount: number;
@@ -63,7 +64,7 @@ export function usePositions(): UsePositionsReturn {
   const [rawResponse, setRawResponse] = useState<PositionsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { prices, connected } = usePrices();
+  const { prices, connected, wsStatus } = usePrices();
 
   const loadPositions = useCallback(async () => {
     try {
@@ -119,6 +120,7 @@ export function usePositions(): UsePositionsReturn {
     loading,
     error,
     connected,
+    wsStatus,
     totalUnrealizedPnl,
     totalFundingEarned,
     activeCount,

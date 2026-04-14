@@ -315,8 +315,14 @@ async def ws_prices(websocket: WebSocket):
     _ws_clients.append(websocket)
     client = get_client()
     if not client:
-        await websocket.send_json({"error": "Pacifica client not configured"})
-        await websocket.close()
+        await websocket.send_json({
+            "type": "error",
+            "error": "Pacifica client not configured",
+            "timestamp": int(time.time() * 1000),
+        })
+        await websocket.close(code=1011, reason="Pacifica client not configured")
+        if websocket in _ws_clients:
+            _ws_clients.remove(websocket)
         return
     try:
         while True:
@@ -333,6 +339,14 @@ async def ws_prices(websocket: WebSocket):
                 break
             except Exception as e:
                 logger.error(f"WS price relay error: {e}")
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "error": str(e),
+                        "timestamp": int(time.time() * 1000),
+                    })
+                except Exception:
+                    break
             await asyncio.sleep(5)
     except WebSocketDisconnect:
         pass

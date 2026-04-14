@@ -1,4 +1,5 @@
 from __future__ import annotations
+import time
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -223,72 +224,131 @@ async def clone_vault(req: CloneVaultRequest):
 
 @router.get("/api/vault/marketplace")
 async def vault_marketplace():
-    """Get marketplace of cloneable vaults (hardcoded for demo)."""
-    # In production, this would query all vaults from a database
+    """Get marketplace of cloneable vaults with real performance data from Pacifica."""
+    import json
+    from pathlib import Path
+    from main import get_client
+
+    client = get_client()
+    data_dir = Path("data")
+
+    vault_templates = [
+        {
+            "vault_id": "perpyield-delta-neutral",
+            "name": "Delta Neutral Funding Farm",
+            "description": "Low-risk funding rate arbitrage. Consistent 5-15% APY.",
+            "strategy_id": "delta_neutral",
+            "strategy_name": "Delta Neutral (Funding Arbitrage)",
+            "risk_level": "Low",
+            "expected_apy": "5-20%",
+            "creator": "PerpYield Official",
+        },
+        {
+            "vault_id": "perpyield-momentum-master",
+            "name": "Momentum Master",
+            "description": "Trend-following with EMA+RSI confirmation. Captures major moves.",
+            "strategy_id": "momentum_swing",
+            "strategy_name": "Momentum Swing",
+            "risk_level": "Medium",
+            "expected_apy": "15-50%",
+            "creator": "PerpYield Official",
+        },
+        {
+            "vault_id": "perpyield-mean-reversion",
+            "name": "Mean Reversion Bot",
+            "description": "Bollinger Bands bounce strategy. Best in ranging markets.",
+            "strategy_id": "mean_reversion",
+            "strategy_name": "Mean Reversion",
+            "risk_level": "Medium",
+            "expected_apy": "10-40%",
+            "creator": "PerpYield Official",
+        },
+        {
+            "vault_id": "perpyield-breakout-hunter",
+            "name": "Breakout Hunter",
+            "description": "Volatility breakout with ATR-based sizing. High reward potential.",
+            "strategy_id": "volatility_breakout",
+            "strategy_name": "Volatility Breakout",
+            "risk_level": "High",
+            "expected_apy": "20-80%",
+            "creator": "PerpYield Official",
+        },
+    ]
+
+    for vt in vault_templates:
+        state_file = data_dir / f"{vt['vault_id']}.json"
+        vt["total_deposited"] = 0
+        vt["depositor_count"] = 0
+        vt["clone_count"] = 0
+        vt["performance_7d"] = None
+        vt["performance_30d"] = None
+
+        if state_file.exists():
+            try:
+                raw = json.loads(state_file.read_text())
+                vt["total_deposited"] = raw.get("total_deposited", 0)
+                vt["depositor_count"] = len(raw.get("depositors", {}))
+                vt["clone_count"] = raw.get("clone_count", 0)
+
+                history = raw.get("performance_history", [])
+                now_ms = int(time.time() * 1000)
+                week_ms = 7 * 24 * 3600 * 1000
+                month_ms = 30 * 24 * 3600 * 1000
+
+                week_points = [h for h in history if h.get("timestamp", 0) >= now_ms - week_ms]
+                month_points = [h for h in history if h.get("timestamp", 0) >= now_ms - month_ms]
+                deposited = vt["total_deposited"]
+
+                if len(week_points) >= 2:
+                    start_val = week_points[0].get("vault_value", 0)
+                    end_val = week_points[-1].get("vault_value", 0)
+                    ret = ((end_val - start_val) / start_val * 100) if start_val > 0 else 0.0
+                    vt["performance_7d"] = f"{ret:.2f}%"
+                elif deposited > 0 and history:
+                    current = history[-1].get("vault_value", deposited)
+                    ret = ((current - deposited) / deposited * 100) if deposited > 0 else 0.0
+                    vt["performance_7d"] = f"{ret:.2f}%"
+
+                if len(month_points) >= 2:
+                    start_val = month_points[0].get("vault_value", 0)
+                    end_val = month_points[-1].get("vault_value", 0)
+                    ret = ((end_val - start_val) / start_val * 100) if start_val > 0 else 0.0
+                    vt["performance_30d"] = f"{ret:.2f}%"
+                elif deposited > 0 and history:
+                    current = history[-1].get("vault_value", deposited)
+                    ret = ((current - deposited) / deposited * 100) if deposited > 0 else 0.0
+                    vt["performance_30d"] = f"{ret:.2f}%"
+            except Exception:
+                pass
+
+        if vt["performance_7d"] is None and client:
+            try:
+                from strategy.funding_scanner import FundingScanner
+                scanner = FundingScanner(client)
+                rates = await scanner.fetch_all_funding_rates()
+                if vt["strategy_id"] == "delta_neutral":
+                    positive_rates = [r for r in rates if r["funding_rate"] > 0]
+                    if positive_rates:
+                        avg_funding = sum(r["funding_rate"] for r in positive_rates) / len(positive_rates)
+                        est_apy = FundingScanner.rate_to_apy(avg_funding)
+                        vt["estimated_apy"] = f"{est_apy:.2f}%"
+                elif vt["strategy_id"] == "momentum_swing":
+                    sorted_rates = sorted(rates, key=lambda r: abs(float(r.get("volume_24h", 0))), reverse=True)
+                    if sorted_rates:
+                        top_funding = float(sorted_rates[0].get("funding_rate", 0))
+                        est_apy = FundingScanner.rate_to_apy(top_funding)
+                        vt["estimated_apy"] = f"{est_apy:.2f}%"
+            except Exception:
+                pass
+
+        if vt["performance_7d"] is None:
+            vt.pop("performance_7d", None)
+        if vt["performance_30d"] is None:
+            vt.pop("performance_30d", None)
+
     return {
-        "featured_vaults": [
-            {
-                "vault_id": "perpyield-delta-neutral",
-                "name": "Delta Neutral Funding Farm",
-                "description": "Low-risk funding rate arbitrage. Consistent 5-15% APY.",
-                "strategy_id": "delta_neutral",
-                "strategy_name": "Delta Neutral (Funding Arbitrage)",
-                "risk_level": "Low",
-                "expected_apy": "5-20%",
-                "total_deposited": 0,
-                "depositor_count": 0,
-                "clone_count": 0,
-                "creator": "PerpYield Official",
-                "performance_7d": "8.5%",
-                "performance_30d": "12.3%",
-            },
-            {
-                "vault_id": "perpyield-momentum-master",
-                "name": "Momentum Master",
-                "description": "Trend-following with EMA+RSI confirmation. Captures major moves.",
-                "strategy_id": "momentum_swing",
-                "strategy_name": "Momentum Swing",
-                "risk_level": "Medium",
-                "expected_apy": "15-50%",
-                "total_deposited": 0,
-                "depositor_count": 0,
-                "clone_count": 0,
-                "creator": "PerpYield Official",
-                "performance_7d": "18.2%",
-                "performance_30d": "42.1%",
-            },
-            {
-                "vault_id": "perpyield-mean-reversion",
-                "name": "Mean Reversion Bot",
-                "description": "Bollinger Bands bounce strategy. Best in ranging markets.",
-                "strategy_id": "mean_reversion",
-                "strategy_name": "Mean Reversion",
-                "risk_level": "Medium",
-                "expected_apy": "10-40%",
-                "total_deposited": 0,
-                "depositor_count": 0,
-                "clone_count": 0,
-                "creator": "PerpYield Official",
-                "performance_7d": "6.4%",
-                "performance_30d": "28.7%",
-            },
-            {
-                "vault_id": "perpyield-breakout-hunter",
-                "name": "Breakout Hunter",
-                "description": "Volatility breakout with ATR-based sizing. High reward potential.",
-                "strategy_id": "volatility_breakout",
-                "strategy_name": "Volatility Breakout",
-                "risk_level": "High",
-                "expected_apy": "20-80%",
-                "total_deposited": 0,
-                "depositor_count": 0,
-                "clone_count": 0,
-                "creator": "PerpYield Official",
-                "performance_7d": "24.8%",
-                "performance_30d": "65.3%",
-            },
-        ],
-        "total_vaults": 4,
+        "featured_vaults": vault_templates,
+        "total_vaults": len(vault_templates),
         "filters": {
             "strategies": list_available_strategies(),
             "risk_levels": ["Low", "Medium", "High"],

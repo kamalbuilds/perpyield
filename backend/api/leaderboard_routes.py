@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import time
 import math
+import logging
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 
 router = APIRouter(tags=["leaderboard"])
+logger = logging.getLogger(__name__)
 
 DATA_DIR = Path("data")
 
@@ -34,6 +36,8 @@ def _load_all_vaults() -> list[dict]:
     if not DATA_DIR.exists():
         return vaults
     for f in DATA_DIR.glob("*.json"):
+        if f.name == "risk_state.json" or f.name.endswith("_social.json"):
+            continue
         try:
             raw = json.loads(f.read_text())
             vaults.append(raw)
@@ -42,8 +46,11 @@ def _load_all_vaults() -> list[dict]:
     return vaults
 
 
-def _enrich_featured_vaults() -> list[dict]:
+async def _enrich_featured_vaults() -> list[dict]:
     from strategy.vault_manager import STRATEGY_REGISTRY
+    from main import get_client
+
+    client = get_client()
 
     featured = [
         {
@@ -110,7 +117,38 @@ def _enrich_featured_vaults() -> list[dict]:
 
     for fv in featured:
         history = fv.get("performance_history", [])
+
+        if client and fv.get("total_deposited", 0) > 0:
+            try:
+                from strategy.vault_manager import VaultManager
+                vm = VaultManager(client, vault_id=fv["vault_id"])
+                vault_value = await vm.get_total_vault_value()
+                if history:
+                    last_recorded = history[-1].get("vault_value", 0)
+                    if vault_value != last_recorded:
+                        history.append({
+                            "timestamp": now_ms,
+                            "vault_value": vault_value,
+                            "net_pnl": vault_value - fv["total_deposited"],
+                            "pnl_pct": ((vault_value - fv["total_deposited"]) / fv["total_deposited"] * 100) if fv["total_deposited"] > 0 else 0.0,
+                        })
+            except Exception as e:
+                logger.warning(f"Could not fetch live vault value for {fv['vault_id']}: {e}")
+
         if not history:
+            if client:
+                try:
+                    from strategy.funding_scanner import FundingScanner
+                    scanner = FundingScanner(client)
+                    rates = await scanner.fetch_all_funding_rates()
+                    strategy_id = fv["strategy_id"]
+                    if strategy_id == "delta_neutral":
+                        positive_rates = [r for r in rates if r["funding_rate"] > 0]
+                        if positive_rates:
+                            avg_funding = sum(r["funding_rate"] for r in positive_rates) / len(positive_rates)
+                            fv["estimated_apy"] = round(FundingScanner.rate_to_apy(avg_funding), 2)
+                except Exception:
+                    pass
             fv["return_7d"] = 0.0
             fv["return_30d"] = 0.0
             fv["sharpe_ratio"] = 0.0
@@ -164,7 +202,7 @@ async def vault_leaderboard(
     period: str = Query(default="7d", pattern="^(7d|30d|all)$"),
     sort_by: str = Query(default="return", pattern="^(return|sharpe|tvl|clones)$"),
 ):
-    vaults = _enrich_featured_vaults()
+    vaults = await _enrich_featured_vaults()
 
     sort_key_map = {
         "return": "return_7d" if period == "7d" else "return_30d",
@@ -179,7 +217,7 @@ async def vault_leaderboard(
     ranked = []
     for idx, v in enumerate(vaults):
         return_val = v.get("return_7d", 0) if period == "7d" else v.get("return_30d", 0)
-        ranked.append({
+        entry = {
             "rank": idx + 1,
             "vault_id": v["vault_id"],
             "name": v["name"],
@@ -194,7 +232,10 @@ async def vault_leaderboard(
             "clone_count": v.get("clone_count", 0),
             "follower_count": v.get("follower_count", 0),
             "weekly_depositors": v.get("weekly_depositors", 0),
-        })
+        }
+        if v.get("estimated_apy") is not None:
+            entry["estimated_apy"] = v["estimated_apy"]
+        ranked.append(entry)
 
     return {
         "period": period,

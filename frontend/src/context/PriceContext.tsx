@@ -53,25 +53,50 @@ interface PriceHistoryPoint {
   price: number;
 }
 
+export type WsStatus = "connecting" | "connected" | "disconnected";
+
 interface PriceState {
   prices: Record<string, SymbolPrice>;
   history: Record<string, PriceHistoryPoint[]>;
   connected: boolean;
+  wsStatus: WsStatus;
   lastUpdate: number | null;
   error: string | null;
 }
 
 interface PriceContextValue extends PriceState {
   usePriceFeed: (symbol: string) => SymbolPrice | null;
+  wsStatus: WsStatus;
 }
 
 const PriceContext = createContext<PriceContextValue | null>(null);
 
-const WS_URL =
-  typeof window !== "undefined"
-    ? (process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000") +
-      "/ws/prices"
-    : "";
+function resolveWsUrl(): string {
+  if (typeof window === "undefined") return "";
+  const explicit = process.env.NEXT_PUBLIC_WS_URL;
+  if (explicit) return explicit + "/ws/prices";
+  const apiBase = process.env.NEXT_PUBLIC_API_URL || "";
+  if (apiBase) {
+    const url = new URL(apiBase);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    return url.origin + "/ws/prices";
+  }
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const host = window.location.host;
+  return `${proto}//${host}/ws/prices`;
+}
+
+const WS_URL = resolveWsUrl();
+
+function resolveApiBase(): string {
+  if (typeof window === "undefined") return "";
+  const explicit = process.env.NEXT_PUBLIC_API_URL;
+  if (explicit) return explicit;
+  if (window.location.port === "3000") return "http://localhost:8000";
+  return "";
+}
+
+const API_BASE = resolveApiBase();
 
 const MAX_HISTORY_POINTS = 288;
 const HISTORY_INTERVAL_MS = 5 * 60 * 1000;
@@ -132,6 +157,7 @@ export function PriceProvider({ children }: { children: ReactNode }) {
     prices: {},
     history: {},
     connected: false,
+    wsStatus: "disconnected",
     lastUpdate: null,
     error: null,
   });
@@ -145,7 +171,16 @@ export function PriceProvider({ children }: { children: ReactNode }) {
   const mountedRef = useRef(true);
 
   const processMessage = useCallback((msg: WsMessage) => {
-    if (msg.type !== "price_update" || !Array.isArray(msg.prices)) return;
+    if (msg.type === "error") {
+      setState((prev) => ({
+        ...prev,
+        connected: false,
+        wsStatus: "disconnected",
+        error: String((msg as unknown as Record<string, unknown>).error ?? "Server error"),
+      }));
+      return;
+    }
+    if (msg.type !== "price_update" || !Array.isArray(msg.prices) || msg.prices.length === 0) return;
 
     const now = Date.now();
     const newPrices: Record<string, SymbolPrice> = {};
@@ -178,6 +213,8 @@ export function PriceProvider({ children }: { children: ReactNode }) {
       ...prev,
       prices: { ...prev.prices, ...newPrices },
       history: { ...history },
+      connected: true,
+      wsStatus: "connected",
       lastUpdate: msg.timestamp,
       error: null,
     }));
@@ -202,11 +239,16 @@ export function PriceProvider({ children }: { children: ReactNode }) {
 
       ws.onopen = () => {
         reconnectAttempts.current = 0;
-        setState((prev) => ({ ...prev, connected: true, error: null }));
+        setState((prev) => ({ ...prev, wsStatus: "connecting", error: null }));
       };
 
-      ws.onclose = () => {
-        setState((prev) => ({ ...prev, connected: false }));
+      ws.onclose = (e) => {
+        setState((prev) => ({
+          ...prev,
+          connected: false,
+          wsStatus: "disconnected",
+          error: e.code !== 1000 ? `WebSocket closed (${e.code})` : null,
+        }));
         const delay = Math.min(
           1000 * Math.pow(2, reconnectAttempts.current),
           30000
@@ -218,6 +260,8 @@ export function PriceProvider({ children }: { children: ReactNode }) {
       ws.onerror = () => {
         setState((prev) => ({
           ...prev,
+          connected: false,
+          wsStatus: "disconnected",
           error: "WebSocket connection failed",
         }));
         ws.close();
@@ -246,12 +290,34 @@ export function PriceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     mountedRef.current = true;
     connect();
+
+    if (API_BASE && Object.keys(state.prices).length === 0) {
+      (async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/v1/market/prices`);
+          if (!res.ok) return;
+          const json = await res.json();
+          const priceList: WsPriceData[] = json.data ?? json;
+          if (Array.isArray(priceList) && priceList.length > 0) {
+            processMessage({
+              type: "price_update",
+              timestamp: Date.now(),
+              prices: priceList,
+              funding_rates: [],
+            });
+          }
+        } catch {
+          // WS will provide data
+        }
+      })();
+    }
+
     return () => {
       mountedRef.current = false;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
     };
-  }, [connect]);
+  }, [connect]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const usePriceFeed = useCallback(
     (symbol: string): SymbolPrice | null => {
@@ -266,6 +332,7 @@ export function PriceProvider({ children }: { children: ReactNode }) {
         prices: state.prices,
         history: state.history,
         connected: state.connected,
+        wsStatus: state.wsStatus,
         lastUpdate: state.lastUpdate,
         error: state.error,
         usePriceFeed,
