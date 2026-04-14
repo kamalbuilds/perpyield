@@ -27,7 +27,7 @@ from strategy.backtester import Backtester
 from api.market_routes import router as market_router
 from api.account_routes import router as account_router
 from api.order_routes import router as order_router
-from api.lake_routes import router as lake_router
+from api.lake_routes import router as lake_routes
 from api.strategy_routes import router as strategy_router
 from api.vault_routes import router as vault_router
 from api.backtest_routes import router as backtest_router
@@ -47,70 +47,87 @@ _backtester: Optional[Backtester] = None
 _ws_clients: list[WebSocket] = []
 
 
-def get_client() -> PacificaClient:
+def get_client() -> Optional[PacificaClient]:
+    """Get Pacifica client - returns None if not configured."""
     global _client
     if _client is None:
-        _client = PacificaClient(
-            private_key=config.PACIFICA_PRIVATE_KEY,
-            testnet=config.PACIFICA_TESTNET,
-            builder_code=config.PACIFICA_BUILDER_CODE,
-            agent_wallet_key=config.PACIFICA_AGENT_WALLET,
-        )
+        # Only initialize if we have required config
+        if not config.PACIFICA_PRIVATE_KEY:
+            logger.warning("PACIFICA_PRIVATE_KEY not set, client unavailable")
+            return None
+        try:
+            _client = PacificaClient(
+                private_key=config.PACIFICA_PRIVATE_KEY,
+                testnet=config.PACIFICA_TESTNET,
+                builder_code=config.PACIFICA_BUILDER_CODE,
+                agent_wallet_key=config.PACIFICA_AGENT_WALLET,
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize PacificaClient: {e}")
+            return None
     return _client
 
 
-def get_scanner() -> FundingScanner:
+def get_scanner() -> Optional[FundingScanner]:
     global _scanner
     if _scanner is None:
-        _scanner = FundingScanner(get_client())
+        client = get_client()
+        if client:
+            _scanner = FundingScanner(client)
     return _scanner
 
 
-def get_strategy() -> DeltaNeutralStrategy:
+def get_strategy() -> Optional[DeltaNeutralStrategy]:
     global _strategy
     if _strategy is None:
-        _strategy = DeltaNeutralStrategy(get_client())
+        client = get_client()
+        if client:
+            _strategy = DeltaNeutralStrategy(client)
     return _strategy
 
 
-def get_rebalancer() -> Rebalancer:
+def get_rebalancer() -> Optional[Rebalancer]:
     global _rebalancer
     if _rebalancer is None:
-        _rebalancer = Rebalancer(get_client())
+        client = get_client()
+        if client:
+            _rebalancer = Rebalancer(client)
     return _rebalancer
 
 
-def get_vault_manager() -> VaultManager:
+def get_vault_manager() -> Optional[VaultManager]:
     global _vault_manager
     if _vault_manager is None:
-        _vault_manager = VaultManager(get_client())
+        client = get_client()
+        if client:
+            _vault_manager = VaultManager(client)
     return _vault_manager
 
 
-def get_backtester() -> Backtester:
+def get_backtester() -> Optional[Backtester]:
     global _backtester
     if _backtester is None:
-        _backtester = Backtester(get_client())
+        client = get_client()
+        if client:
+            _backtester = Backtester(client)
     return _backtester
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    get_client()
-    get_scanner()
-    get_strategy()
-    get_rebalancer()
-    get_vault_manager()
-    get_backtester()
-    logger.info("PerpYield backend initialized")
+    # Initialize services lazily - don't fail if no config
+    logger.info("PerpYield backend starting...")
     yield
+    # Shutdown cleanup
     from api.strategy_routes import get_strategy_task, get_rebalancer_task
     st = get_strategy_task()
     rt = get_rebalancer_task()
     if st and not st.done():
         st.cancel()
     if rt and not rt.done():
-        get_rebalancer().stop_loop()
+        rebalancer = get_rebalancer()
+        if rebalancer:
+            rebalancer.stop_loop()
         rt.cancel()
     if _client:
         await _client.aclose()
@@ -131,7 +148,7 @@ app.add_middleware(
 app.include_router(market_router, prefix="/api/v1")
 app.include_router(account_router, prefix="/api/v1")
 app.include_router(order_router, prefix="/api/v1")
-app.include_router(lake_router, prefix="/api/v1")
+app.include_router(lake_routes, prefix="/api/v1")
 
 # Legacy routes (keep /api prefix for backward compat)
 app.include_router(strategy_router)
@@ -145,7 +162,16 @@ app.include_router(ai_router)
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "perpyield-backend", "version": "2.0.0", "timestamp": int(time.time() * 1000)}
+    """Health check endpoint - always returns OK even if client not configured."""
+    client = get_client()
+    return {
+        "status": "ok",
+        "service": "perpyield-backend",
+        "version": "2.0.0",
+        "timestamp": int(time.time() * 1000),
+        "client_configured": client is not None,
+        "testnet": config.PACIFICA_TESTNET,
+    }
 
 
 @app.get("/health")
@@ -153,12 +179,15 @@ async def health_simple():
     return {"status": "ok", "service": "perpyield-backend"}
 
 
-# Legacy endpoints for backward compatibility
+# Legacy endpoints for backward compatibility - handle missing client gracefully
 
 @app.get("/api/markets")
 async def get_markets():
+    client = get_client()
+    if not client:
+        raise HTTPException(status_code=503, detail="Pacifica client not configured")
     try:
-        markets = await get_client().get_markets()
+        markets = await client.get_markets()
         return [m.model_dump() for m in markets]
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -166,8 +195,11 @@ async def get_markets():
 
 @app.get("/api/prices")
 async def get_prices():
+    client = get_client()
+    if not client:
+        raise HTTPException(status_code=503, detail="Pacifica client not configured")
     try:
-        prices = await get_client().get_prices()
+        prices = await client.get_prices()
         return [p.model_dump() for p in prices]
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -175,8 +207,11 @@ async def get_prices():
 
 @app.get("/api/funding/rates")
 async def get_funding_rates():
+    client = get_client()
+    scanner = get_scanner()
+    if not client or not scanner:
+        raise HTTPException(status_code=503, detail="Pacifica client not configured")
     try:
-        scanner = get_scanner()
         all_rates = await scanner.fetch_all_funding_rates()
         ranked = scanner.rank_by_funding_rate(all_rates)
         results = []
@@ -193,8 +228,11 @@ async def get_funding_rates():
 
 @app.get("/api/funding/history/{symbol}")
 async def get_funding_history(symbol: str, hours: int = Query(default=168, ge=1, le=8760)):
+    client = get_client()
+    scanner = get_scanner()
+    if not client or not scanner:
+        raise HTTPException(status_code=503, detail="Pacifica client not configured")
     try:
-        scanner = get_scanner()
         history = await scanner.track_funding_history(symbol, limit=hours)
         return {
             "symbol": history.symbol,
@@ -209,8 +247,11 @@ async def get_funding_history(symbol: str, hours: int = Query(default=168, ge=1,
 
 @app.get("/api/orderbook/{symbol}")
 async def get_orderbook(symbol: str, agg_level: int = Query(default=1, ge=1)):
+    client = get_client()
+    if not client:
+        raise HTTPException(status_code=503, detail="Pacifica client not configured")
     try:
-        book = await get_client().get_orderbook(symbol, agg_level)
+        book = await client.get_orderbook(symbol, agg_level)
         return book.model_dump()
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -222,10 +263,13 @@ async def get_klines(
     interval: str = Query(default="1h"),
     days: int = Query(default=7, ge=1, le=365),
 ):
+    client = get_client()
+    if not client:
+        raise HTTPException(status_code=503, detail="Pacifica client not configured")
     end_ms = int(time.time() * 1000)
     start_ms = end_ms - days * 24 * 3600 * 1000
     try:
-        candles = await get_client().get_klines(symbol, interval, start_ms, end_ms)
+        candles = await client.get_klines(symbol, interval, start_ms, end_ms)
         return [c.model_dump() for c in candles]
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -238,6 +282,10 @@ async def ws_prices(websocket: WebSocket):
     await websocket.accept()
     _ws_clients.append(websocket)
     client = get_client()
+    if not client:
+        await websocket.send_json({"error": "Pacifica client not configured"})
+        await websocket.close()
+        return
     try:
         while True:
             try:
