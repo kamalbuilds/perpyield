@@ -183,3 +183,387 @@ export interface DeltaSummary {
 export async function fetchDeltaSummary(): Promise<DeltaSummary> {
   return apiFetch<DeltaSummary>("/api/delta/summary");
 }
+
+// ---- Strategy Marketplace ----
+
+export interface StrategyMarketplaceEntry {
+  id: string;
+  name: string;
+  description: string;
+  indicators: string[];
+  risk_level: string;
+  expected_apy: string;
+}
+
+export interface StrategyMarketplaceResponse {
+  strategies: StrategyMarketplaceEntry[];
+  total_count: number;
+}
+
+export async function fetchStrategyMarketplace(): Promise<StrategyMarketplaceResponse> {
+  return apiFetch<StrategyMarketplaceResponse>("/api/strategies/marketplace");
+}
+
+export interface StrategyInfoResponse {
+  id: string;
+  name: string;
+  description: string;
+  indicators: string[];
+  risk_level: string;
+  expected_apy: string;
+  config_defaults: Record<string, number | string>;
+}
+
+export async function fetchStrategyInfo(strategyId: string): Promise<StrategyInfoResponse> {
+  return apiFetch<StrategyInfoResponse>(`/api/strategies/${encodeURIComponent(strategyId)}/info`);
+}
+
+// ---- Vault Marketplace ----
+
+export interface FeaturedVault {
+  vault_id: string;
+  name: string;
+  description: string;
+  strategy_id: string;
+  strategy_name: string;
+  risk_level: string;
+  expected_apy: string;
+  total_deposited: number;
+  depositor_count: number;
+  clone_count: number;
+  creator: string;
+  performance_7d: string;
+  performance_30d: string;
+}
+
+export interface VaultMarketplaceResponse {
+  featured_vaults: FeaturedVault[];
+  total_vaults: number;
+  filters: {
+    strategies: StrategyMarketplaceEntry[];
+    risk_levels: string[];
+  };
+}
+
+export async function fetchVaultMarketplace(): Promise<VaultMarketplaceResponse> {
+  return apiFetch<VaultMarketplaceResponse>("/api/vault/marketplace");
+}
+
+export async function cloneVault(
+  newVaultId: string,
+  clonerAddress: string,
+  customName?: string,
+  customDescription?: string
+): Promise<{ status: string; template: Record<string, unknown> }> {
+  return apiFetch("/api/vault/clone", {
+    method: "POST",
+    body: JSON.stringify({
+      new_vault_id: newVaultId,
+      cloner_address: clonerAddress,
+      custom_name: customName,
+      custom_description: customDescription,
+    }),
+  });
+}
+
+export async function switchStrategy(
+  strategyId: string,
+  config?: Record<string, unknown>
+): Promise<{ status: string; vault_id: string; strategy_id: string; strategy_name: string }> {
+  return apiFetch("/api/vault/switch-strategy", {
+    method: "POST",
+    body: JSON.stringify({ strategy_id: strategyId, config }),
+  });
+}
+
+export interface VaultStrategiesResponse {
+  current_strategy_id: string;
+  available_strategies: StrategyMarketplaceEntry[];
+}
+
+export async function fetchVaultStrategies(): Promise<VaultStrategiesResponse> {
+  return apiFetch<VaultStrategiesResponse>("/api/vault/strategies");
+}
+
+// ---- Strategy Backtest ----
+
+export interface StrategyBacktestRequest {
+  strategy_id: string;
+  symbol: string;
+  days: number;
+  config?: Record<string, unknown>;
+}
+
+export interface StrategyBacktestResponse {
+  strategy_id: string;
+  symbol: string;
+  days: number;
+  backtest: {
+    total_return_pct: number;
+    annualized_apy: number;
+    sharpe_ratio: number;
+    max_drawdown_pct: number;
+    win_rate: number;
+    total_trades: number;
+    funding_earned: number;
+    trading_fees: number;
+    net_pnl: number;
+  };
+  equity_curve_sample: number[];
+}
+
+export async function fetchStrategyBacktest(req: StrategyBacktestRequest): Promise<StrategyBacktestResponse> {
+  return apiFetch(`/api/strategies/${encodeURIComponent(req.strategy_id)}/backtest`, {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+// ---- Leaderboard ----
+
+export interface LeaderboardVault {
+  rank: number;
+  vault_id: string;
+  name: string;
+  creator: string;
+  strategy_id: string;
+  strategy_name: string;
+  risk_level: string;
+  tvl: number;
+  return_7d: number;
+  return_30d: number;
+  sharpe_ratio: number;
+  clone_count: number;
+  follower_count: number;
+  weekly_depositors: number;
+}
+
+export interface LeaderboardResponse {
+  period: string;
+  sort_by: string;
+  vaults: LeaderboardVault[];
+  total: number;
+}
+
+export async function fetchLeaderboard(
+  period: string = "7d",
+  sortBy: string = "return"
+): Promise<LeaderboardResponse> {
+  return apiFetch<LeaderboardResponse>(
+    `/api/leaderboard/vaults?period=${period}&sort_by=${sortBy}`
+  );
+}
+
+// ---- Top Traders ----
+
+export interface TopTrader {
+  rank: number;
+  address: string;
+  vault_count: number;
+  total_tvl: number;
+  best_return_7d: number;
+  total_clones: number;
+  total_followers: number;
+}
+
+export interface TopTradersResponse {
+  traders: TopTrader[];
+  total: number;
+}
+
+export async function fetchTopTraders(
+  limit: number = 5
+): Promise<TopTradersResponse> {
+  return apiFetch<TopTradersResponse>(`/api/leaderboard/traders?limit=${limit}`);
+}
+
+// ---- Social ----
+
+export interface FollowResponse {
+  status: string;
+  vault_id: string;
+  follower_count: number;
+}
+
+export async function followVault(
+  userAddress: string,
+  vaultId: string
+): Promise<FollowResponse> {
+  return apiFetch("/api/social/follow-vault", {
+    method: "POST",
+    body: JSON.stringify({ user_address: userAddress, vault_id: vaultId }),
+  });
+}
+
+export async function unfollowVault(
+  userAddress: string,
+  vaultId: string
+): Promise<FollowResponse> {
+  return apiFetch("/api/social/unfollow-vault", {
+    method: "POST",
+    body: JSON.stringify({ user_address: userAddress, vault_id: vaultId }),
+  });
+}
+
+export interface FollowingVault {
+  vault_id: string;
+  follower_count: number;
+  clone_count: number;
+}
+
+export interface FollowingResponse {
+  user_address: string;
+  following: FollowingVault[];
+  total_following: number;
+}
+
+export async function fetchFollowing(
+  userAddress: string
+): Promise<FollowingResponse> {
+  return apiFetch<FollowingResponse>(
+    `/api/social/following?user_address=${encodeURIComponent(userAddress)}`
+  );
+}
+
+export interface VaultSocialStatsResponse {
+  vault_id: string;
+  clone_count: number;
+  follower_count: number;
+  view_count: number;
+  weekly_depositors: number;
+}
+
+export async function fetchVaultSocialStats(
+  vaultId: string
+): Promise<VaultSocialStatsResponse> {
+  return apiFetch<VaultSocialStatsResponse>(
+    `/api/social/vault-stats/${encodeURIComponent(vaultId)}`
+  );
+}
+
+export async function trackVaultView(vaultId: string): Promise<{ status: string; view_count: number }> {
+  return apiFetch("/api/social/track-view", {
+    method: "POST",
+    body: JSON.stringify({ vault_id: vaultId }),
+  });
+}
+
+export interface ShareData {
+  vault_id: string;
+  name: string;
+  pnl_pct: number;
+  tvl: number;
+  clone_count: number;
+  follower_count: number;
+  share_text: string;
+  twitter_url: string;
+}
+
+export async function fetchShareData(vaultId: string): Promise<ShareData> {
+  return apiFetch<ShareData>(
+    `/api/social/share/${encodeURIComponent(vaultId)}`
+  );
+}
+
+// ---- AI Advisor ----
+
+export interface MarketAnalysisMetrics {
+  avg_funding_rate: number;
+  positive_funding_pct: number;
+  volatility_index: number;
+  trend_strength: number;
+  range_bound_score: number;
+  funding_rate_count: number;
+}
+
+export interface MarketAnalysisData {
+  current_regime: "trending" | "ranging" | "volatile" | "neutral";
+  recommended_strategy: string;
+  confidence: number;
+  reasoning: string;
+  metrics: MarketAnalysisMetrics;
+  top_funding_symbols: { symbol: string; funding_rate: number; apy: number; volume_24h: number }[];
+  high_volatility_symbols: { symbol: string; volatility: number; trend_direction: string }[];
+  trending_symbols: { symbol: string; trend_strength: number; trend_direction: string }[];
+  regime_changed: boolean;
+  previous_regime: string | null;
+  timestamp: number;
+}
+
+export async function fetchMarketAnalysis(): Promise<MarketAnalysisData> {
+  const res = await apiFetch<{ success: boolean; data: MarketAnalysisData }>("/api/ai/market-analysis");
+  return res.data;
+}
+
+export interface StrategyRecommendation {
+  strategy_id: string;
+  strategy_name: string;
+  score: number;
+  confidence: number;
+  reasoning: string;
+  risk_level: string;
+  expected_apy: string;
+  regime_match: string;
+}
+
+export interface RecommendStrategyResponse {
+  risk_profile: string;
+  current_regime: string;
+  recommendations: StrategyRecommendation[];
+  metrics: MarketAnalysisMetrics;
+  timestamp: number;
+}
+
+export async function fetchRecommendedStrategies(
+  riskProfile: "conservative" | "moderate" | "aggressive" = "moderate"
+): Promise<RecommendStrategyResponse> {
+  const res = await apiFetch<{ success: boolean; data: RecommendStrategyResponse }>("/api/ai/recommend-strategy", {
+    method: "POST",
+    body: JSON.stringify({ risk_profile: riskProfile }),
+  });
+  return res.data;
+}
+
+export interface StrategySimulationData {
+  strategy_id: string;
+  strategy_name: string;
+  amount: number;
+  days: number;
+  projected_return_pct: number;
+  projected_return_usd: number;
+  projected_apy: number;
+  risk_adjusted_return: number;
+  confidence: number;
+  best_case: number;
+  worst_case: number;
+}
+
+export interface SimulateResponse {
+  simulation: StrategySimulationData;
+  assumptions: string[];
+}
+
+export async function fetchStrategySimulation(
+  strategyId: string,
+  amount: number = 1000,
+  days: number = 30
+): Promise<SimulateResponse> {
+  const res = await apiFetch<{ success: boolean; data: SimulateResponse }>("/api/ai/simulate", {
+    method: "POST",
+    body: JSON.stringify({ strategy_id: strategyId, amount, days }),
+  });
+  return res.data;
+}
+
+export interface AIAlert {
+  type: string;
+  severity: "low" | "medium" | "high" | "info";
+  message: string;
+  suggestion: string;
+  timestamp: number;
+}
+
+export async function fetchAIAlerts(): Promise<AIAlert[]> {
+  const res = await apiFetch<{ success: boolean; data: AIAlert[] }>("/api/ai/alerts");
+  return res.data;
+}
