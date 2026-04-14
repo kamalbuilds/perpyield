@@ -381,8 +381,8 @@ class PacificaClient:
             payload["client_order_id"] = client_order_id
         return await self._signed_post("/orders/cancel", "cancel_order", payload)
 
-    async def cancel_all_orders(self, symbol: Optional[str] = None) -> dict:
-        payload: dict = {}
+    async def cancel_all_orders(self, symbol: Optional[str] = None, exclude_reduce_only: bool = False) -> dict:
+        payload: dict = {"all_symbols": symbol is None, "exclude_reduce_only": exclude_reduce_only}
         if symbol:
             payload["symbol"] = symbol
         return await self._signed_post("/orders/cancel_all", "cancel_all_orders", payload)
@@ -438,7 +438,7 @@ class PacificaClient:
             payload["stop_loss"] = sl
         elif sl_price:
             payload["sl_price"] = sl_price
-        return await self._signed_post("/positions/tpsl", "set_position_tpsl", payload)
+        return await self._signed_post("/positions/tpsl", "set_tpsl", payload)
 
     async def set_leverage(self, symbol: str, leverage: int) -> dict:
         return await self._signed_post("/account/leverage", "set_leverage", {"symbol": symbol, "leverage": leverage})
@@ -463,13 +463,13 @@ class PacificaClient:
         return await self._signed_post("/lake/create", "create_lake", payload)
 
     async def deposit_to_lake(self, lake_address: str, amount: str) -> dict:
-        return await self._signed_post("/lake/deposit", "deposit_lake", {"lake": lake_address, "amount": amount})
+        return await self._signed_post("/lake/deposit", "deposit_to_lake", {"lake": lake_address, "amount": str(amount)})
 
     async def lake_deposit(self, lake_address: str, amount: str) -> dict:
         return await self.deposit_to_lake(lake_address, amount)
 
     async def withdraw_from_lake(self, lake_address: str, shares: str) -> dict:
-        return await self._signed_post("/lake/withdraw", "withdraw_lake", {"lake": lake_address, "shares": shares})
+        return await self._signed_post("/lake/withdraw", "withdraw_from_lake", {"lake": lake_address, "shares": str(shares)})
 
-    async def lake_withdraw(self, lake_address: str, amount: str) -> dict:
-        return await self.withdraw_from_lake(lake_address, amount)
+    async def lake_withdraw(self, lake_address: str, shares: str) -> dict:
+        return await self.withdraw_from_lake(lake_address, shares)
