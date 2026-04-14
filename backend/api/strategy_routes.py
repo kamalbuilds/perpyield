@@ -4,14 +4,40 @@ import os
 import time
 import logging
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+from typing import Optional
 
 from strategies.basis_arb import BasisArbStrategy
+from strategy import (
+    MomentumSwingStrategy,
+    MeanReversionStrategy,
+    VolatilityBreakoutStrategy,
+    MomentumConfig,
+    MeanReversionConfig,
+    VolatilityBreakoutConfig,
+)
+from strategy.vault_manager import STRATEGY_REGISTRY, list_available_strategies, get_strategy_class
 
 router = APIRouter(tags=["strategy"])
 logger = logging.getLogger(__name__)
 
 _strategy_task = None
 _rebalancer_task = None
+
+# Strategy instance cache for backtesting
+_strategy_instances: dict[str, any] = {}
+
+
+class StrategySwitchRequest(BaseModel):
+    strategy_id: str
+    config: Optional[dict] = None
+
+
+class BacktestRequest(BaseModel):
+    strategy_id: str
+    symbol: str
+    days: int = 30
+    config: Optional[dict] = None
 
 
 def _get_client():
@@ -31,12 +57,29 @@ def _get_strategy():
 
 def _get_rebalancer():
     from main import get_rebalancer
-    return get_rebalancer()
+    return _get_rebalancer()
 
 
 def _get_vault_manager():
     from main import get_vault_manager
     return get_vault_manager()
+
+
+def _get_strategy_instance(strategy_id: str, config: Optional[dict] = None):
+    """Get or create a strategy instance for backtesting."""
+    cache_key = f"{strategy_id}_{hash(str(config))}"
+
+    if cache_key not in _strategy_instances:
+        client = _get_client()
+        strategy_class, config_class = get_strategy_class(strategy_id)
+
+        if strategy_class is None:
+            raise ValueError(f"Unknown strategy: {strategy_id}")
+
+        cfg = config_class(**config) if config else config_class()
+        _strategy_instances[cache_key] = strategy_class(client, cfg)
+
+    return _strategy_instances[cache_key]
 
 
 async def _strategy_loop():
@@ -52,6 +95,103 @@ async def _strategy_loop():
         await asyncio.sleep(interval)
 
 
+# ========== Strategy Marketplace ==========
+
+@router.get("/api/strategies/marketplace")
+async def get_strategy_marketplace():
+    """Get all available strategies for the marketplace."""
+    return {
+        "strategies": list_available_strategies(),
+        "total_count": len(STRATEGY_REGISTRY),
+    }
+
+
+@router.get("/api/strategies/{strategy_id}/info")
+async def get_strategy_info(strategy_id: str):
+    """Get detailed info about a specific strategy."""
+    if strategy_id not in STRATEGY_REGISTRY:
+        raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
+
+    info = STRATEGY_REGISTRY[strategy_id]
+    return {
+        "id": strategy_id,
+        "name": info["name"],
+        "description": info["description"],
+        "indicators": info["indicators"],
+        "risk_level": info["risk_level"],
+        "expected_apy": info["expected_apy"],
+        "config_defaults": {
+            "delta_neutral": {
+                "min_funding_rate": 0.0001,
+                "min_apy": 8.0,
+                "max_leverage": 3.0,
+                "max_position_pct": 0.25,
+            },
+            "momentum_swing": {
+                "ema_fast_period": 9,
+                "ema_slow_period": 21,
+                "rsi_period": 14,
+                "momentum_threshold": 60.0,
+                "max_positions": 5,
+            },
+            "mean_reversion": {
+                "bb_period": 20,
+                "bb_std_dev": 2.0,
+                "rsi_overbought": 70.0,
+                "rsi_oversold": 30.0,
+                "max_positions": 4,
+            },
+            "volatility_breakout": {
+                "atr_period": 14,
+                "atr_multiplier_entry": 0.5,
+                "atr_multiplier_stop": 1.5,
+                "max_positions": 4,
+            },
+        }.get(strategy_id, {}),
+    }
+
+
+@router.post("/api/strategies/{strategy_id}/backtest")
+async def backtest_strategy(req: BacktestRequest):
+    """Run a backtest for a specific strategy."""
+    try:
+        # Use the vault manager's backtester for consistency
+        from strategy.backtester import Backtester, BacktestConfig
+
+        client = _get_client()
+        bt = Backtester(client)
+
+        # Run simulation
+        result = await bt.simulate(req.symbol, req.days)
+
+        # Get strategy-specific insights
+        strategy = _get_strategy_instance(req.strategy_id, req.config)
+
+        return {
+            "strategy_id": req.strategy_id,
+            "symbol": req.symbol,
+            "days": req.days,
+            "backtest": {
+                "total_return_pct": round(result.total_return_pct, 4),
+                "annualized_apy": round(result.annualized_return_pct, 4),
+                "sharpe_ratio": round(result.sharpe_ratio, 4),
+                "max_drawdown_pct": round(result.max_drawdown_pct, 4),
+                "win_rate": round(result.win_rate, 2),
+                "total_trades": result.total_trades,
+                "funding_earned": round(result.total_funding_collected, 4),
+                "trading_fees": round(result.total_fees_paid, 4),
+                "net_pnl": round(result.final_capital - result.initial_capital, 4),
+            },
+            "equity_curve_sample": result.equity_curve[::max(1, len(result.equity_curve)//50)][:50],
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ========== Strategy Control ==========
+
 @router.post("/api/strategy/start")
 async def strategy_start():
     global _strategy_task, _rebalancer_task
@@ -64,11 +204,18 @@ async def strategy_start():
 
     _strategy_task = asyncio.create_task(_strategy_loop())
 
-    rebalancer = _get_rebalancer()
-    interval = int(os.getenv("REBALANCE_INTERVAL", "300"))
-    _rebalancer_task = asyncio.create_task(rebalancer.run_loop(interval))
+    # Only run rebalancer for delta_neutral
+    if vm.state.strategy_id == "delta_neutral":
+        rebalancer = _get_rebalancer()
+        interval = int(os.getenv("REBALANCE_INTERVAL", "300"))
+        _rebalancer_task = asyncio.create_task(rebalancer.run_loop(interval))
 
-    return {"status": "started", "timestamp": int(time.time() * 1000)}
+    return {
+        "status": "started",
+        "timestamp": int(time.time() * 1000),
+        "strategy_id": vm.state.strategy_id,
+        "strategy_name": STRATEGY_REGISTRY.get(vm.state.strategy_id, {}).get("name", "Unknown"),
+    }
 
 
 @router.post("/api/strategy/stop")
@@ -102,7 +249,12 @@ async def strategy_stop():
 @router.get("/api/strategy/status")
 async def strategy_status():
     try:
-        return _get_strategy().get_status()
+        vm = _get_vault_manager()
+        return {
+            "vault_strategy": vm.strategy.get_status(),
+            "current_strategy_id": vm.state.strategy_id,
+            "strategy_name": STRATEGY_REGISTRY.get(vm.state.strategy_id, {}).get("name", "Unknown"),
+        }
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
@@ -112,9 +264,10 @@ async def run_strategy_cycle():
     try:
         return await _get_vault_manager().run_strategy_cycle()
     except RuntimeError:
-        strategy = _get_strategy()
+        vm = _get_vault_manager()
         return {
-            "strategy": strategy.get_status(),
+            "strategy": vm.strategy.get_status(),
+            "strategy_id": vm.state.strategy_id,
             "rebalances": [],
             "pnl": {"vault_value": 0, "net_pnl": 0, "pnl_pct": 0},
             "timestamp": int(time.time() * 1000),
@@ -124,18 +277,21 @@ async def run_strategy_cycle():
         raise HTTPException(status_code=502, detail=str(exc))
 
 
+# ========== Strategy Scanning ==========
+
 @router.get("/api/positions")
 async def get_positions():
     try:
         client = _get_client()
         positions = await client.get_positions()
-        strategy = _get_strategy()
+        vm = _get_vault_manager()
         return {
             "live_positions": [p.model_dump() for p in positions],
-            "strategy_positions": strategy.get_status(),
+            "strategy_positions": vm.strategy.get_status(),
+            "current_strategy_id": vm.state.strategy_id,
         }
     except Exception:
-        return {"live_positions": [], "strategy_positions": {}}
+        return {"live_positions": [], "strategy_positions": {}, "current_strategy_id": "unknown"}
 
 
 @router.get("/api/strategies/funding")
@@ -184,8 +340,17 @@ async def scanner_summary():
 @router.get("/api/delta/summary")
 async def delta_summary():
     try:
-        rebalancer = _get_rebalancer()
-        return await rebalancer.get_delta_summary()
+        vm = _get_vault_manager()
+        # Only show delta for delta_neutral strategy
+        if vm.state.strategy_id == "delta_neutral":
+            rebalancer = _get_rebalancer()
+            return await rebalancer.get_delta_summary()
+        else:
+            return {
+                "strategy_id": vm.state.strategy_id,
+                "delta_tracking": "not_applicable",
+                "note": "Delta tracking only available for delta_neutral strategy",
+            }
     except Exception:
         return {
             "total_long_exposure": 0,
@@ -194,6 +359,70 @@ async def delta_summary():
             "delta_pct": 0,
             "needs_rebalance": False,
         }
+
+
+@router.get("/api/strategies/momentum-scan")
+async def momentum_scan():
+    """Scan for momentum swing opportunities."""
+    try:
+        strategy = MomentumSwingStrategy(_get_client())
+        signals = await strategy.scan_opportunities()
+        return [
+            {
+                "symbol": s.symbol,
+                "direction": s.direction.value,
+                "strength": round(s.strength, 2),
+                "entry_price": s.entry_price,
+                "stop_loss": s.stop_loss,
+                "take_profit": s.take_profit,
+                "indicators": s.indicators,
+            }
+            for s in signals[:5]
+        ]
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.get("/api/strategies/reversion-scan")
+async def reversion_scan():
+    """Scan for mean reversion opportunities."""
+    try:
+        strategy = MeanReversionStrategy(_get_client())
+        signals = await strategy.scan_opportunities()
+        return [
+            {
+                "symbol": s.symbol,
+                "state": s.state.value,
+                "deviation_score": round(s.deviation_score, 2),
+                "entry_price": s.entry_price,
+                "target_price": s.target_price,
+                "indicators": s.indicators,
+            }
+            for s in signals[:5]
+        ]
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.get("/api/strategies/breakout-scan")
+async def breakout_scan():
+    """Scan for volatility breakout opportunities."""
+    try:
+        strategy = VolatilityBreakoutStrategy(_get_client())
+        signals = await strategy.scan_opportunities()
+        return [
+            {
+                "symbol": s.symbol,
+                "direction": s.direction.value,
+                "volatility_score": round(s.volatility_score, 2),
+                "entry_price": s.entry_price,
+                "atr": s.atr,
+                "indicators": s.indicators,
+            }
+            for s in signals[:5]
+        ]
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
 
 def get_strategy_task():
