@@ -10,12 +10,21 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fnmatch import fnmatch
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 import config
+
+_cors_patterns = [p.strip() for p in config.CORS_ORIGINS.split(",") if p.strip()]
+
+
+def _origin_allowed(origin: str) -> bool:
+    return any(fnmatch(origin, pat) for pat in _cors_patterns)
+
+
 from pacifica.client import PacificaClient, sf
 from pacifica.websocket_client import PacificaWebSocket
 from strategy.funding_scanner import FundingScanner
@@ -138,7 +147,8 @@ app = FastAPI(title="PerpYield API", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=config.CORS_ORIGINS.split(","),
+    allow_origins=[],
+    allow_origin_callback=_origin_allowed,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

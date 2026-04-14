@@ -24,7 +24,6 @@ VAULT_MANAGEMENT_FEE = 0.02
 VAULT_PERFORMANCE_FEE = 0.20
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
-# Default CORS origins - Railway should override this with actual deployed domains
 _DEFAULT_ORIGINS = (
     "http://localhost:3000,"
     "http://localhost:3001,"
