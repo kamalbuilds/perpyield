@@ -88,7 +88,7 @@ def _enrich_featured_vaults() -> list[dict]:
         },
     ]
 
-    on_disk = {v["vault_id"]: v for v in _load_all_vaults()}
+    on_disk = {v.get("vault_id", "unknown"): v for v in _load_all_vaults() if v.get("vault_id")}
 
     for fv in featured:
         disk = on_disk.get(fv["vault_id"])
