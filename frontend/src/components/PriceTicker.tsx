@@ -121,7 +121,8 @@ function TickerItem({ item }: { item: TickerItem }) {
 }
 
 export default function PriceTicker() {
-  const { prices, connected } = usePrices();
+  const { prices, wsStatus } = usePrices();
+  const connected = wsStatus === "connected";
   const [fallbackRates, setFallbackRates] = useState<Record<string, FundingRateEntry>>({});
   const [loaded, setLoaded] = useState(false);
 

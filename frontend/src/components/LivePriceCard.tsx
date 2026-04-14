@@ -48,10 +48,11 @@ export default function LivePriceCard({
   symbol,
   onSelectSymbol,
 }: LivePriceCardProps) {
-  const { prices, history, connected } = usePrices();
+  const { prices, history, wsStatus } = usePrices();
   const price: SymbolPrice | null = prices[symbol] ?? null;
   const priceHistory = history[symbol] ?? [];
   const [hovering, setHovering] = useState(false);
+  const connected = wsStatus === "connected";
 
   const markPrice = price?.price ?? 0;
   const change24hPct = price?.change24hPct ?? 0;
