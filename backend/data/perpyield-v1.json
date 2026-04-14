@@ -1,11 +1,70 @@
 {
   "vault_id": "perpyield-v1",
-  "total_shares": 0.0,
-  "total_deposited": 0.0,
-  "total_funding_earned": 0,
+  "total_shares": 50.0,
+  "total_deposited": 100.0,
+  "total_funding_earned": 0.0,
   "total_fees_paid": 0.0,
-  "depositors": {},
+  "depositors": {
+    "EmY65a9mPRaHjTMmN4B1ZF4dw1EDd4DNe27uRN29U2xd": {
+      "address": "EmY65a9mPRaHjTMmN4B1ZF4dw1EDd4DNe27uRN29U2xd",
+      "shares": 50.0,
+      "deposited_amount": 100.0,
+      "deposit_time": 1776162639003
+    }
+  },
   "created_at": 0,
-  "updated_at": 1776089498173,
-  "is_active": true
+  "updated_at": 1776181907595,
+  "is_active": false,
+  "strategy_id": "momentum_swing",
+  "strategy_config": {},
+  "cloned_from": null,
+  "clone_count": 0,
+  "creator_address": null,
+  "vault_name": null,
+  "description": null,
+  "performance_history": [
+    {
+      "timestamp": 1776167534488,
+      "vault_value": 9489.272498,
+      "net_pnl": 9389.272498,
+      "pnl_pct": 9389.272498
+    },
+    {
+      "timestamp": 1776167537423,
+      "vault_value": 9489.271226,
+      "net_pnl": 9389.271226,
+      "pnl_pct": 9389.271226
+    },
+    {
+      "timestamp": 1776167629336,
+      "vault_value": 9489.267337,
+      "net_pnl": 9389.267337,
+      "pnl_pct": 9389.267337
+    },
+    {
+      "timestamp": 1776180580410,
+      "vault_value": 100.0,
+      "net_pnl": 0.0,
+      "pnl_pct": 0.0
+    },
+    {
+      "timestamp": 1776180608162,
+      "vault_value": 100.0,
+      "net_pnl": 0.0,
+      "pnl_pct": 0.0
+    },
+    {
+      "timestamp": 1776181905515,
+      "vault_value": 100.0,
+      "net_pnl": 0.0,
+      "pnl_pct": 0.0
+    },
+    {
+      "timestamp": 1776181907595,
+      "vault_value": 100.0,
+      "net_pnl": 0.0,
+      "pnl_pct": 0.0
+    }
+  ],
+  "social_stats": {}
 }
