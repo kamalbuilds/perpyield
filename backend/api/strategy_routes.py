@@ -34,12 +34,28 @@ class StrategySwitchRequest(BaseModel):
     config: Optional[dict] = None
 
 
+class AddMarginRequest(BaseModel):
+    symbol: str
+    side: str
+    amount: str
+    isolated: bool = False
+
+
 class BacktestRequest(BaseModel):
     strategy_id: str
     symbol: str
     days: int = 30
     initial_capital: float = 10_000.0
     config: Optional[dict] = None
+
+
+class TPSLRequest(BaseModel):
+    symbol: str
+    side: str
+    take_profit: Optional[dict] = None
+    stop_loss: Optional[dict] = None
+    tp_price: Optional[str] = None
+    sl_price: Optional[str] = None
 
 
 def _get_client():
@@ -279,6 +295,54 @@ async def run_strategy_cycle():
 
 
 # ========== Strategy Scanning ==========
+
+@router.post("/api/positions/tpsl")
+async def set_tpsl(req: TPSLRequest):
+    """Set take profit / stop loss for a position via PacificaClient.set_tpsl()."""
+    client = _get_client()
+    if not client:
+        raise HTTPException(status_code=503, detail="Pacifica client not configured. Set PACIFICA_PRIVATE_KEY in .env")
+    try:
+        result = await client.set_tpsl(
+            symbol=req.symbol.upper(),
+            side=req.side,
+            take_profit=req.take_profit,
+            stop_loss=req.stop_loss,
+            tp_price=req.tp_price,
+            sl_price=req.sl_price,
+        )
+        return result
+    except Exception as exc:
+        logger.error(f"TP/SL set failed for {req.symbol}: {exc}", exc_info=True)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/api/positions/margin")
+async def add_margin(req: AddMarginRequest):
+    """Add margin to an existing position via Pacifica API."""
+    client = _get_client()
+    if not client:
+        raise HTTPException(status_code=503, detail="Pacifica client not configured. Set PACIFICA_PRIVATE_KEY in .env")
+    try:
+        pacifica_side = "bid" if req.side.lower() == "long" else "ask" if req.side.lower() == "short" else req.side
+        result = await client.add_margin(
+            symbol=req.symbol.upper(),
+            side=pacifica_side,
+            amount=req.amount,
+            isolated=req.isolated,
+        )
+        logger.info(f"Margin added: {req.symbol} {req.side} +{req.amount}")
+        return {
+            "status": "ok",
+            "symbol": req.symbol.upper(),
+            "side": req.side,
+            "amount_added": req.amount,
+            "pacific_response": result,
+        }
+    except Exception as exc:
+        logger.error(f"Add margin failed for {req.symbol}: {exc}", exc_info=True)
+        raise HTTPException(status_code=502, detail=str(exc))
+
 
 @router.get("/api/positions")
 async def get_positions():

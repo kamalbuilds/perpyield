@@ -2,10 +2,11 @@
 
 import { useState, useCallback } from "react";
 import { usePositions, type EnrichedPosition } from "@/hooks/usePositions";
-import { closePosition, setTpsl } from "@/lib/api";
+import { closePosition, setTpsl, addMargin } from "@/lib/api";
 import PositionTable from "@/components/PositionTable";
 import PositionCard from "@/components/PositionCard";
 import ClosePositionModal from "@/components/ClosePositionModal";
+import AddMarginModal from "@/components/AddMarginModal";
 import TPSLModal from "@/components/TPSLModal";
 
 function formatCurrency(n: number | undefined | null): string {
@@ -28,7 +29,7 @@ function StatCard({
 }: {
   label: string;
   value: string | null;
-  accent?: "green" | "red";
+  accent?: "green" | "red" | "yellow";
   loading: boolean;
 }) {
   const valueColor =
@@ -36,6 +37,8 @@ function StatCard({
       ? "text-accent-green"
       : accent === "red"
       ? "text-accent-red"
+      : accent === "yellow"
+      ? "text-yellow-400"
       : "text-foreground";
 
   return (
@@ -76,6 +79,8 @@ export default function DashboardPage() {
   const [closeError, setCloseError] = useState<string | null>(null);
   const [tpslTarget, setTpslTarget] = useState<EnrichedPosition | null>(null);
   const [tpslModalOpen, setTpslModalOpen] = useState(false);
+  const [marginTarget, setMarginTarget] = useState<EnrichedPosition | null>(null);
+  const [marginModalOpen, setMarginModalOpen] = useState(false);
 
   const handleClose = useCallback((pos: EnrichedPosition) => {
     setCloseTarget(pos);
@@ -112,8 +117,17 @@ export default function DashboardPage() {
   );
 
   const handleAddMargin = useCallback((pos: EnrichedPosition) => {
-    console.log("Add margin:", pos.symbol, pos.side);
+    setMarginTarget(pos);
+    setMarginModalOpen(true);
   }, []);
+
+  const handleAddMarginConfirm = useCallback(
+    async (position: EnrichedPosition, amount: string, isolated: boolean) => {
+      await addMargin(position.symbol, position.side, amount, isolated);
+      refetch();
+    },
+    [refetch]
+  );
 
   const handleTpSl = useCallback((pos: EnrichedPosition) => {
     setTpslTarget(pos);
@@ -282,6 +296,16 @@ export default function DashboardPage() {
           setTpslTarget(null);
         }}
         onConfirm={handleTpSlConfirm}
+      />
+
+      <AddMarginModal
+        position={marginTarget}
+        open={marginModalOpen}
+        onClose={() => {
+          setMarginModalOpen(false);
+          setMarginTarget(null);
+        }}
+        onConfirm={handleAddMarginConfirm}
       />
     </div>
   );

@@ -440,6 +440,21 @@ class PacificaClient:
             payload["sl_price"] = sl_price
         return await self._signed_post("/positions/tpsl", "set_tpsl", payload)
 
+    async def add_margin(
+        self,
+        symbol: str,
+        side: str,
+        amount: str,
+        isolated: bool = False,
+    ) -> dict:
+        payload = {
+            "symbol": symbol,
+            "side": side,
+            "amount": str(amount),
+            "isolated": isolated,
+        }
+        return await self._signed_post("/positions/add_margin", "add_margin", payload)
+
     async def set_leverage(self, symbol: str, leverage: int) -> dict:
         return await self._signed_post("/account/leverage", "set_leverage", {"symbol": symbol, "leverage": leverage})
 
