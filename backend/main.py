@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fnmatch import fnmatch
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response as StarletteResponse
 
 load_dotenv()
 
@@ -19,10 +22,36 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 import config
 
 _cors_patterns = [p.strip() for p in config.CORS_ORIGINS.split(",") if p.strip()]
+_cors_methods = "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT"
+_cors_headers = "Accept, Authorization, Content-Type, X-Requested-With, X-Api-Key"
 
 
-def _origin_allowed(origin: str) -> bool:
-    return any(fnmatch(origin, pat) for pat in _cors_patterns)
+class WildcardCORSMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        origin = request.headers.get("origin", "")
+        allowed = bool(origin) and any(fnmatch(origin, p) for p in _cors_patterns)
+
+        if request.method == "OPTIONS" and allowed:
+            return StarletteResponse(
+                status_code=200,
+                headers={
+                    "access-control-allow-origin": origin,
+                    "access-control-allow-credentials": "true",
+                    "access-control-allow-methods": _cors_methods,
+                    "access-control-allow-headers": _cors_headers,
+                    "access-control-max-age": "600",
+                    "vary": "Origin",
+                },
+            )
+
+        response = await call_next(request)
+
+        if allowed:
+            response.headers["access-control-allow-origin"] = origin
+            response.headers["access-control-allow-credentials"] = "true"
+            response.headers["vary"] = "Origin"
+
+        return response
 
 
 from pacifica.client import PacificaClient, sf
@@ -145,14 +174,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="PerpYield API", version="2.0.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[],
-    allow_origin_callback=_origin_allowed,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(WildcardCORSMiddleware)
 
 # New modular routes (prefixed under /api/v1)
 app.include_router(market_router, prefix="/api/v1")
