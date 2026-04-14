@@ -2,9 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import NotificationBell from "@/components/NotificationBell";
 
 const navItems = [
+  { href: "/leaderboard", label: "Leaderboard" },
   { href: "/", label: "Dashboard" },
+  { href: "/marketplace", label: "Marketplace" },
+  { href: "/backtest", label: "Backtest" },
   { href: "/analytics", label: "Analytics" },
   { href: "/strategy", label: "Strategy" },
 ];
@@ -40,9 +44,12 @@ export default function Header() {
             })}
           </nav>
         </div>
-        <button className="px-4 py-2 rounded-lg text-sm font-medium border border-card-border bg-white/5 text-muted hover:text-foreground hover:border-accent-green/30 transition-colors">
-          Connect Wallet
-        </button>
+        <div className="flex items-center gap-3">
+          <NotificationBell />
+          <button className="px-4 py-2 rounded-lg text-sm font-medium border border-card-border bg-white/5 text-muted hover:text-foreground hover:border-accent-green/30 transition-colors">
+            Connect Wallet
+          </button>
+        </div>
       </div>
     </header>
   );

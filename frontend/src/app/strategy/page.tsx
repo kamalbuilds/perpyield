@@ -11,12 +11,14 @@ import {
   type StrategyStatus,
   type DeltaSummary,
 } from "@/lib/api";
+import { useNotifications } from "@/hooks/useNotifications";
 
 function Skeleton({ className }: { className?: string }) {
   return <div className={`skeleton ${className ?? ""}`} />;
 }
 
 export default function StrategyPage() {
+  const { depositSuccess, depositFailed, withdrawalSuccess, withdrawalFailed, strategySwitched, apiError, notify } = useNotifications();
   const [status, setStatus] = useState<StrategyStatus | null>(null);
   const [deltaSummary, setDeltaSummary] = useState<DeltaSummary | null>(null);
   const [running, setRunning] = useState(false);
