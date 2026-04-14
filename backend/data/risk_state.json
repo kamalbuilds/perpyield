@@ -1,0 +1,10 @@
+{
+  "peak_value": 100.0,
+  "circuit_breaker_active": false,
+  "circuit_breaker_reason": null,
+  "emergency_stop_active": false,
+  "emergency_stop_type": null,
+  "emergency_stop_time": null,
+  "consecutive_losses": 0,
+  "trade_history": []
+}
