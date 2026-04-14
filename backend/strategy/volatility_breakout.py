@@ -5,6 +5,7 @@ from typing import Optional, List
 from enum import Enum
 
 from pacifica.client import PacificaClient, sf
+from indicators.ichimoku import IchimokuCalculator, IchimokuSignal, IchimokuTrend
 
 logger = logging.getLogger(__name__)
 
@@ -85,13 +86,14 @@ class VolatilityBreakoutStrategy:
     STRATEGY_ID = "volatility_breakout"
     STRATEGY_NAME = "Volatility Breakout"
     STRATEGY_DESC = "Breakout strategy using ATR + volume confirmation"
-    INDICATORS = ["ATR", "Volume", "Support/Resistance"]
+    INDICATORS = ["ATR", "Volume", "Support/Resistance", "Ichimoku Cloud"]
 
     def __init__(self, client: PacificaClient, config: Optional[VolatilityBreakoutConfig] = None):
         self.client = client
         self.config = config or VolatilityBreakoutConfig()
         self.active_positions: dict[str, BreakoutPosition] = {}
         self.signal_history: List[BreakoutSignal] = []
+        self.ichimoku = IchimokuCalculator()
 
     async def calculate_atr(self, candles: list, period: int = 14) -> float:
         """Calculate Average True Range."""
@@ -240,10 +242,35 @@ class VolatilityBreakoutStrategy:
                 if direction == BreakoutDirection.NONE:
                     continue
 
+                ichimoku_data = {}
+                cloud_compression_bonus = 0.0
+                if len(candles) >= 52:
+                    cloud = self.ichimoku.calculate(candles, current_price)
+                    if cloud:
+                        compression = self.ichimoku.cloud_compression(cloud, current_price)
+                        breakout_type = self.ichimoku.cloud_breakout_signal(cloud, current_price)
+                        ichimoku_data = {
+                            "tenkan_sen": cloud.tenkan_sen,
+                            "kijun_sen": cloud.kijun_sen,
+                            "cloud_top": cloud.cloud_top,
+                            "cloud_bottom": cloud.cloud_bottom,
+                            "cloud_color": cloud.cloud_color,
+                            "cloud_thickness_pct": (cloud.cloud_thickness / current_price * 100) if current_price > 0 else 0,
+                            "compression_score": compression,
+                            "breakout_type": breakout_type,
+                        }
+                        if compression > 70:
+                            cloud_compression_bonus = compression * 0.2
+                        if direction == BreakoutDirection.LONG and breakout_type in ("strong_breakout_above", "breakout_above"):
+                            cloud_compression_bonus += 10.0
+                        elif direction == BreakoutDirection.SHORT and breakout_type in ("strong_breakout_below", "breakout_below"):
+                            cloud_compression_bonus += 10.0
+
                 # Calculate volatility score
                 volatility_score = self.calculate_volatility_score(
                     current_price, atr, volume_ratio, is_breaking_out
                 )
+                volatility_score = min(100, volatility_score + cloud_compression_bonus)
 
                 if volatility_score < 50:  # Minimum threshold
                     continue
@@ -275,6 +302,8 @@ class VolatilityBreakoutStrategy:
                         "volume_24h": current_volume,
                         "volume_ratio": volume_ratio,
                         "range_pct": (resistance - support) / current_price * 100 if current_price > 0 else 0,
+                        "ichimoku": ichimoku_data,
+                        "cloud_compression_bonus": cloud_compression_bonus,
                     },
                     timestamp=int(time.time() * 1000)
                 )

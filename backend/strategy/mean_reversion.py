@@ -5,6 +5,7 @@ from typing import Optional, List
 from enum import Enum
 
 from pacifica.client import PacificaClient, sf
+from indicators.ichimoku import IchimokuCalculator, IchimokuSignal, IchimokuTrend
 
 logger = logging.getLogger(__name__)
 
@@ -81,13 +82,14 @@ class MeanReversionStrategy:
     STRATEGY_ID = "mean_reversion"
     STRATEGY_NAME = "Mean Reversion"
     STRATEGY_DESC = "Counter-trend strategy using Bollinger Bands + RSI"
-    INDICATORS = ["Bollinger Bands", "RSI", "SMA"]
+    INDICATORS = ["Bollinger Bands", "RSI", "SMA", "Ichimoku Cloud"]
 
     def __init__(self, client: PacificaClient, config: Optional[MeanReversionConfig] = None):
         self.client = client
         self.config = config or MeanReversionConfig()
         self.active_positions: dict[str, ReversionPosition] = {}
         self.signal_history: List[ReversionSignal] = []
+        self.ichimoku = IchimokuCalculator()
 
     async def calculate_sma(self, candles: list, period: int) -> float:
         """Calculate Simple Moving Average."""
@@ -244,13 +246,38 @@ class MeanReversionStrategy:
 
                 # Generate signal
                 if state == ReversionState.OVERSOLD:
-                    # Expect bounce up - go long
-                    target_price = sma  # Return to mean
-                    stop_loss = current_price * 0.96  # 4% emergency stop
-                else:  # OVERBOUGHT
-                    # Expect pullback - go short
-                    target_price = sma  # Return to mean
-                    stop_loss = current_price * 1.04  # 4% emergency stop
+                    target_price = sma
+                    stop_loss = current_price * 0.96
+                    if len(candles) >= 52:
+                        cloud = self.ichimoku.calculate(candles, current_price)
+                        if cloud and cloud.price_below_cloud(current_price):
+                            targets = self.ichimoku.cloud_edge_reversion_targets(cloud)
+                            target_price = targets["cloud_bottom"]
+                            stop_loss = cloud.cloud_bottom * 0.97
+                            z_score += 0.5
+                else:
+                    target_price = sma
+                    stop_loss = current_price * 1.04
+                    if len(candles) >= 52:
+                        cloud = self.ichimoku.calculate(candles, current_price)
+                        if cloud and cloud.price_above_cloud(current_price):
+                            targets = self.ichimoku.cloud_edge_reversion_targets(cloud)
+                            target_price = targets["cloud_top"]
+                            stop_loss = cloud.cloud_top * 1.03
+                            z_score += 0.5
+
+                ichimoku_data = {}
+                if len(candles) >= 52:
+                    cloud = self.ichimoku.calculate(candles, current_price)
+                    if cloud:
+                        ichimoku_data = {
+                            "tenkan_sen": cloud.tenkan_sen,
+                            "kijun_sen": cloud.kijun_sen,
+                            "cloud_top": cloud.cloud_top,
+                            "cloud_bottom": cloud.cloud_bottom,
+                            "cloud_color": cloud.cloud_color,
+                            "price_vs_cloud": "above" if cloud.price_above_cloud(current_price) else "below" if cloud.price_below_cloud(current_price) else "inside",
+                        }
 
                 signal = ReversionSignal(
                     symbol=symbol,
@@ -268,6 +295,7 @@ class MeanReversionStrategy:
                         "std_dev": std,
                         "z_score": z_score,
                         "volume_24h": volume_24h,
+                        "ichimoku": ichimoku_data,
                     },
                     timestamp=int(time.time() * 1000)
                 )

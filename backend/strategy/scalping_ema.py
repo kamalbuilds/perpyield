@@ -5,6 +5,7 @@ from typing import Optional, List
 from enum import Enum
 
 from pacifica.client import PacificaClient, sf
+from indicators.ichimoku import IchimokuCalculator, IchimokuSignal, IchimokuTrend
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class ScalpingEMAStrategy:
         self.config = config or ScalpingEMAConfig()
         self.active_positions: dict[str, ScalpingEMAPosition] = {}
         self.signal_history: List[ScalpingEMASignal] = []
+        self.ichimoku = IchimokuCalculator()
 
     async def calculate_ema(self, candles: list, period: int) -> float:
         if len(candles) < period:
@@ -97,39 +99,33 @@ class ScalpingEMAStrategy:
         if len(candles) < 52:
             return {}
 
-        recent = candles[-52:]
+        current_close = 0.0
+        try:
+            current_close = float(candles[-1].close)
+        except (ValueError, TypeError, AttributeError):
+            return {}
 
-        def midpoint(candle_list, period):
-            segment = candle_list[-period:]
-            highs = [sf(c.high) for c in segment]
-            lows = [sf(c.low) for c in segment]
-            if not highs or not lows:
-                return 0.0
-            return (max(highs) + min(lows)) / 2
+        cloud = self.ichimoku.calculate(candles, current_close)
+        if not cloud:
+            return {}
 
-        tenkan = midpoint(recent, 9)
-        kijun = midpoint(recent, 26)
-
-        senkou_a = (tenkan + kijun) / 2
-
-        period_52 = recent[-52:] if len(recent) >= 52 else recent
-        high_52 = max(sf(c.high) for c in period_52)
-        low_52 = min(sf(c.low) for c in period_52)
-        senkou_b = (high_52 + low_52) / 2
-
-        current_close = sf(candles[-1].close)
-        chikou = current_close
+        signal = self.ichimoku.generate_signal(cloud, current_close)
 
         return {
-            "tenkan_sen": tenkan,
-            "kijun_sen": kijun,
-            "senkou_span_a": senkou_a,
-            "senkou_span_b": senkou_b,
-            "chikou_span": chikou,
-            "cloud_top": max(senkou_a, senkou_b),
-            "cloud_bottom": min(senkou_a, senkou_b),
-            "above_cloud": current_close > max(senkou_a, senkou_b),
-            "below_cloud": current_close < min(senkou_a, senkou_b),
+            "tenkan_sen": cloud.tenkan_sen,
+            "kijun_sen": cloud.kijun_sen,
+            "senkou_span_a": cloud.senkou_span_a,
+            "senkou_span_b": cloud.senkou_span_b,
+            "chikou_span": cloud.chikou_span,
+            "cloud_top": cloud.cloud_top,
+            "cloud_bottom": cloud.cloud_bottom,
+            "above_cloud": cloud.price_above_cloud(current_close),
+            "below_cloud": cloud.price_below_cloud(current_close),
+            "cloud_color": cloud.cloud_color,
+            "tk_cross": signal.tk_cross,
+            "ichimoku_trend": signal.trend.value,
+            "bullish_conditions": signal.bullish_conditions,
+            "bearish_conditions": signal.bearish_conditions,
         }
 
     async def scan_opportunities(self) -> list[ScalpingEMASignal]:
@@ -179,15 +175,19 @@ class ScalpingEMAStrategy:
                 if ema_fast > ema_slow:
                     state = EMAState.BULLISH_CROSS
                     ichimoku_confirm = ichimoku.get("above_cloud", False)
+                    tk_confirm = ichimoku.get("tk_cross", "") == "bullish"
                 elif ema_fast < ema_slow:
                     state = EMAState.BEARISH_CROSS
                     ichimoku_confirm = ichimoku.get("below_cloud", False)
+                    tk_confirm = ichimoku.get("tk_cross", "") == "bearish"
                 else:
                     continue
 
                 cross_strength = min(100, distance_pct * 20)
                 if ichimoku_confirm:
                     cross_strength = min(100, cross_strength + 15)
+                if tk_confirm:
+                    cross_strength = min(100, cross_strength + 10)
 
                 if state == EMAState.BULLISH_CROSS:
                     stop_loss = current_price * (1 - self.config.stop_loss_pct / 100)
@@ -209,6 +209,8 @@ class ScalpingEMAStrategy:
                         "ema_distance_pct": distance_pct,
                         "volume_24h": volume_24h,
                         "ichimoku": ichimoku,
+                        "ichimoku_cloud_confirm": ichimoku_confirm,
+                        "ichimoku_tk_confirm": tk_confirm,
                     },
                     timestamp=int(time.time() * 1000)
                 )

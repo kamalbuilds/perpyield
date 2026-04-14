@@ -275,6 +275,8 @@ class MomentumSwingStrategy:
                         "rsi": rsi,
                         "price_change_24h": price_change_24h,
                         "volume_24h": volume_24h,
+                        "ichimoku": ichimoku_data,
+                        "ichimoku_breakout_bonus": ichimoku_breakout_bonus,
                     },
                     timestamp=int(time.time() * 1000)
                 )
