@@ -78,7 +78,7 @@ export default function BacktestResults({ result, onSave, onCompare }: BacktestR
 
   const equityData = (result.equity_curve_sample ?? []).map((v, i) => ({
     index: i,
-    equity: typeof v === "number" ? v : v.equity ?? 0,
+    equity: v.equity ?? 0,
   }));
 
   const summaryCards: { label: string; value: string; accent?: "green" | "red" | "blue" | "purple" }[] = [
@@ -96,12 +96,10 @@ export default function BacktestResults({ result, onSave, onCompare }: BacktestR
     const step = Math.max(1, Math.floor(curve.length / result.days));
     const months: { month: string; return_pct: number }[] = [];
     const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const getValue = (v: number | { timestamp: number; equity: number }) =>
-      typeof v === "number" ? v : v.equity ?? 0;
-    let prev = getValue(curve[0]);
+    let prev = curve[0].equity ?? 0;
     const startIdx = Math.floor(step * 0);
     for (let i = startIdx + step; i < curve.length; i += step) {
-      const curr = getValue(curve[i]);
+      const curr = curve[i].equity ?? 0;
       const ret = prev !== 0 ? ((curr - prev) / Math.abs(prev)) * 100 : 0;
       const mIdx = months.length % 12;
       months.push({ month: monthNames[mIdx], return_pct: ret });

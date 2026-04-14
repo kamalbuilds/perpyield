@@ -308,6 +308,11 @@ export interface StrategyBacktestRequest {
   config?: Record<string, unknown>;
 }
 
+export interface EquityCurvePoint {
+  timestamp: number;
+  equity: number;
+}
+
 export interface StrategyBacktestResponse {
   strategy_id: string;
   symbol: string;
@@ -323,7 +328,7 @@ export interface StrategyBacktestResponse {
     trading_fees: number;
     net_pnl: number;
   };
-  equity_curve_sample: number[];
+  equity_curve_sample: EquityCurvePoint[];
 }
 
 export async function fetchStrategyBacktest(req: StrategyBacktestRequest): Promise<StrategyBacktestResponse> {
