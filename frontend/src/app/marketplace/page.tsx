@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { useWallet } from "@solana/wallet-adapter-react";
 import {
   fetchVaultMarketplace,
   cloneVault,
@@ -33,6 +34,7 @@ const STRATEGY_ICONS: Record<string, string> = {
 };
 
 export default function MarketplacePage() {
+  const { publicKey } = useWallet();
   const [data, setData] = useState<VaultMarketplaceResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -64,12 +66,16 @@ export default function MarketplacePage() {
   const filtered = filterRisk === "All" ? vaults : vaults.filter((v) => v.risk_level === filterRisk);
 
   async function handleClone(vault: FeaturedVault) {
+    if (!publicKey) {
+      setCloneMessage({ vaultId: vault.vault_id, type: "error", text: "Connect your wallet to clone" });
+      return;
+    }
     setCloneLoading(vault.vault_id);
     setCloneMessage(null);
     try {
       const result = await cloneVault(
         `${vault.vault_id}-clone-${Date.now()}`,
-        "demo",
+        publicKey.toBase58(),
         `My ${vault.name}`,
         vault.description
       );

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
 import {
   fetchStrategyStatus,
   startStrategy,
@@ -18,6 +19,7 @@ function Skeleton({ className }: { className?: string }) {
 }
 
 export default function StrategyPage() {
+  const { publicKey } = useWallet();
   const { depositSuccess, depositFailed, withdrawalSuccess, withdrawalFailed, strategySwitched, apiError, notify } = useNotifications();
   const [status, setStatus] = useState<StrategyStatus | null>(null);
   const [strategyName, setStrategyName] = useState<string>("");
@@ -112,10 +114,14 @@ export default function StrategyPage() {
   async function handleDeposit() {
     const amount = parseFloat(depositAmount);
     if (isNaN(amount) || amount <= 0) return;
+    if (!publicKey) {
+      setTxMessage({ type: "error", text: "Connect your wallet to deposit" });
+      return;
+    }
     setDepositLoading(true);
     setTxMessage(null);
     try {
-      await depositVault("demo", amount);
+      await depositVault(publicKey.toBase58(), amount);
       setTxMessage({
         type: "success",
         text: `Deposited ${amount} USDC successfully`,
@@ -134,10 +140,14 @@ export default function StrategyPage() {
   async function handleWithdraw() {
     const shares = parseFloat(withdrawShares);
     if (isNaN(shares) || shares <= 0) return;
+    if (!publicKey) {
+      setTxMessage({ type: "error", text: "Connect your wallet to withdraw" });
+      return;
+    }
     setWithdrawLoading(true);
     setTxMessage(null);
     try {
-      await withdrawVault("demo", shares);
+      await withdrawVault(publicKey.toBase58(), shares);
       setTxMessage({
         type: "success",
         text: `Withdrew ${shares} shares successfully`,
@@ -228,7 +238,7 @@ export default function StrategyPage() {
             />
             <button
               onClick={handleDeposit}
-              disabled={depositLoading || !depositAmount}
+              disabled={depositLoading || !depositAmount || !publicKey}
               className="px-5 py-2.5 rounded-lg text-sm font-medium bg-accent-green text-black hover:bg-accent-green/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {depositLoading ? "..." : "Deposit"}
@@ -249,7 +259,7 @@ export default function StrategyPage() {
             />
             <button
               onClick={handleWithdraw}
-              disabled={withdrawLoading || !withdrawShares}
+              disabled={withdrawLoading || !withdrawShares || !publicKey}
               className="px-5 py-2.5 rounded-lg text-sm font-medium bg-accent-red text-white hover:bg-accent-red/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {withdrawLoading ? "..." : "Withdraw"}
