@@ -288,7 +288,6 @@ async def get_positions():
         vm = _get_vault_manager()
         
         # Map Pacifica positions to frontend format
-        # v2.0.1 - Fixed field mapping for frontend compatibility
         live_positions = []
         for p in raw_positions:
             # Convert "bid" -> "long", "ask" -> "short"
@@ -308,8 +307,6 @@ async def get_positions():
             "live_positions": live_positions,
             "strategy_positions": vm.strategy.get_status(),
             "current_strategy_id": vm.state.strategy_id,
-            "api_version": "2.0.1",
-            "mapped": True,
         }
     except Exception:
         return {"live_positions": [], "strategy_positions": {}, "current_strategy_id": "unknown"}
