@@ -107,8 +107,21 @@ export interface PositionEntry {
   held_since: number;
 }
 
+export interface LivePosition {
+  symbol: string;
+  side: string;
+  size: number;
+  entry_price: number;
+  entry_funding_rate?: number;
+  cumulative_funding: number;
+  mark_price?: string;
+  current_funding?: number;
+  unrealized_pnl?: number;
+  open_time?: number;
+}
+
 export interface PositionsResponse {
-  live_positions: unknown[];
+  live_positions: LivePosition[];
   strategy_positions: {
     active_positions: number;
     positions: PositionEntry[];

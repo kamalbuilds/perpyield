@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { fetchPositions, type PositionsResponse, type PositionEntry } from "@/lib/api";
+import { fetchPositions, type PositionsResponse, type PositionEntry, type LivePosition } from "@/lib/api";
 import { usePrices } from "@/context/PriceContext";
 
 export interface EnrichedPosition extends PositionEntry {
@@ -84,17 +84,18 @@ export function usePositions(): UsePositionsReturn {
   }, [loadPositions]);
 
   // Map strategy positions
-  const strategyPositions = (rawResponse?.strategy_positions?.positions ?? []).map((p) => {
+  const strategyPositions = (rawResponse?.strategy_positions?.positions ?? []).map((p: PositionEntry) => {
     const wsPrice = prices[p.symbol];
     const markPrice = wsPrice?.price ?? p.entry_price;
     return enrichPosition(p, markPrice);
   });
 
   // Map live positions from Pacifica
-  const livePositions = (rawResponse?.live_positions ?? []).map((p) => {
+  const livePositions = (rawResponse?.live_positions ?? []).map((p: LivePosition) => {
     const wsPrice = prices[p.symbol];
-    const markPrice = wsPrice?.price ?? parseFloat(p.mark_price || "0") || p.entry_price;
-    return enrichPosition(p, markPrice);
+    const fallbackPrice = p.mark_price ? parseFloat(p.mark_price) : 0;
+    const markPrice = wsPrice?.price ?? fallbackPrice ?? p.entry_price;
+    return enrichPosition(p as PositionEntry, markPrice);
   });
 
   // Combine both - prefer live positions if they exist
