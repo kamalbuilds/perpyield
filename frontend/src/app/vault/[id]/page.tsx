@@ -245,15 +245,15 @@ export default function VaultDetailPage() {
                   <div className="rounded-lg border border-card-border bg-card-bg p-5">
                     <h3 className="text-sm font-semibold mb-4">Equity Curve (Sample)</h3>
                     <div className="h-40 flex items-end gap-1">
-                      {backtest.equity_curve_sample.map((point: any, i: number) => {
-                        const value = typeof point === "number" ? point : point.equity;
+                      {backtest.equity_curve_sample.map((point, i: number) => {
+                        const value = point.equity ?? 0;
                         const height = `${Math.min(100, Math.max(5, (value / 12000) * 100))}%`;
                         return (
                           <div
                             key={i}
                             className="flex-1 bg-accent-green/30 hover:bg-accent-green/50 transition-colors rounded-sm"
                             style={{ height }}
-                            title={`$${value?.toFixed(2) || 0}`}
+                            title={`$${value.toFixed(2)}`}
                           />
                         );
                       })}

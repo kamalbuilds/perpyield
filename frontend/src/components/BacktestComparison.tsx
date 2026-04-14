@@ -39,7 +39,8 @@ export default function BacktestComparison({ results }: BacktestComparisonProps)
     const point: Record<string, number> = { index: i };
     results.forEach((r) => {
       const curve = r.equity_curve_sample ?? [];
-      point[r.strategy_id] = curve[i] ?? curve[curve.length - 1] ?? 0;
+      const curvePoint = curve[i] ?? curve[curve.length - 1];
+      point[r.strategy_id] = curvePoint?.equity ?? 0;
     });
     return point;
   });
