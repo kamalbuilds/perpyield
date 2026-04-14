@@ -36,6 +36,7 @@ class CancelOrderRequest(BaseModel):
 
 class CancelAllRequest(BaseModel):
     symbol: Optional[str] = None
+    exclude_reduce_only: bool = False
 
 
 class TPSLRequest(BaseModel):
@@ -96,7 +97,8 @@ async def cancel_order(req: CancelOrderRequest):
 async def cancel_all_orders(req: CancelAllRequest):
     try:
         result = await _get_client().cancel_all_orders(
-            req.symbol.upper() if req.symbol else None
+            req.symbol.upper() if req.symbol else None,
+            exclude_reduce_only=req.exclude_reduce_only,
         )
         return result
     except Exception as e:

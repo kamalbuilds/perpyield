@@ -20,6 +20,11 @@ class LakeTransferRequest(BaseModel):
     amount: str
 
 
+class LakeWithdrawRequest(BaseModel):
+    lake_address: str
+    shares: str
+
+
 @router.post("/create")
 async def create_lake(req: CreateLakeRequest):
     try:
@@ -39,9 +44,9 @@ async def lake_deposit(req: LakeTransferRequest):
 
 
 @router.post("/withdraw")
-async def lake_withdraw(req: LakeTransferRequest):
+async def lake_withdraw(req: LakeWithdrawRequest):
     try:
-        result = await _get_client().lake_withdraw(req.lake_address, req.amount)
+        result = await _get_client().lake_withdraw(req.lake_address, req.shares)
         return result
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
