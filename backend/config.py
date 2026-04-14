@@ -24,4 +24,16 @@ VAULT_MANAGEMENT_FEE = 0.02
 VAULT_PERFORMANCE_FEE = 0.20
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
+# Default CORS origins - Railway should override this with actual deployed domains
+_DEFAULT_ORIGINS = (
+    "http://localhost:3000,"
+    "http://localhost:3001,"
+    "http://localhost:3002,"
+    "https://perpyield.vercel.app,"
+    "https://perpyield-git-master-kamalbuilds.vercel.app,"
+    "https://perpyield-*.vercel.app,"
+    "https://*.vercel.app,"
+    "https://kuber-bnb.vercel.app,"
+    "https://frontend-*.vercel.app"
+)
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", _DEFAULT_ORIGINS)

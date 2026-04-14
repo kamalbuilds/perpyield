@@ -283,10 +283,27 @@ async def run_strategy_cycle():
 async def get_positions():
     try:
         client = _get_client()
-        positions = await client.get_positions()
+        raw_positions = await client.get_positions()
         vm = _get_vault_manager()
+        
+        # Map Pacifica positions to frontend format
+        live_positions = []
+        for p in raw_positions:
+            # Convert "bid" -> "long", "ask" -> "short"
+            side = "long" if p.side == "bid" else "short" if p.side == "ask" else p.side
+            live_positions.append({
+                "symbol": p.symbol,
+                "side": side,
+                "size": float(p.amount),
+                "entry_price": float(p.entry_price),
+                "entry_funding_rate": 0.0,
+                "cumulative_funding": float(p.funding),
+                "held_since": p.created_at,
+                "mark_price": None,  # Will be filled by frontend from WS
+            })
+        
         return {
-            "live_positions": [p.model_dump() for p in positions],
+            "live_positions": live_positions,
             "strategy_positions": vm.strategy.get_status(),
             "current_strategy_id": vm.state.strategy_id,
         }
