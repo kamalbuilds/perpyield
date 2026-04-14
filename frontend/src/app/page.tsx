@@ -2,9 +2,11 @@
 
 import { useState, useCallback } from "react";
 import { usePositions, type EnrichedPosition } from "@/hooks/usePositions";
+import { closePosition, setTpsl } from "@/lib/api";
 import PositionTable from "@/components/PositionTable";
 import PositionCard from "@/components/PositionCard";
 import ClosePositionModal from "@/components/ClosePositionModal";
+import TPSLModal from "@/components/TPSLModal";
 
 function formatCurrency(n: number | undefined | null): string {
   const v = n ?? 0;
@@ -59,6 +61,7 @@ export default function DashboardPage() {
     loading,
     error,
     connected,
+    wsStatus,
     totalUnrealizedPnl,
     totalFundingEarned,
     activeCount,
@@ -69,17 +72,43 @@ export default function DashboardPage() {
   const [closeTarget, setCloseTarget] = useState<EnrichedPosition | null>(null);
   const [closeModalOpen, setCloseModalOpen] = useState(false);
   const [positionsCollapsed, setPositionsCollapsed] = useState(false);
+  const [closeLoading, setCloseLoading] = useState(false);
+  const [closeError, setCloseError] = useState<string | null>(null);
+  const [tpslTarget, setTpslTarget] = useState<EnrichedPosition | null>(null);
+  const [tpslModalOpen, setTpslModalOpen] = useState(false);
 
   const handleClose = useCallback((pos: EnrichedPosition) => {
     setCloseTarget(pos);
+    setCloseError(null);
     setCloseModalOpen(true);
   }, []);
 
   const handleCloseConfirm = useCallback(
-    (position: EnrichedPosition, closePercent: number, orderType: "market" | "limit", limitPrice?: number) => {
-      console.log("Closing position:", position.symbol, position.side, closePercent + "%", orderType, limitPrice);
+    async (position: EnrichedPosition, closePercent: number, orderType: "market" | "limit", limitPrice?: number) => {
+      setCloseLoading(true);
+      setCloseError(null);
+      try {
+        const closeSize = Math.abs(position.size) * (closePercent / 100);
+        await closePosition(
+          position.symbol,
+          position.side,
+          closeSize.toFixed(8),
+          {
+            close_percent: closePercent,
+            order_type: orderType,
+            limit_price: limitPrice?.toString(),
+          }
+        );
+        setCloseModalOpen(false);
+        setCloseTarget(null);
+        refetch();
+      } catch (e) {
+        setCloseError(e instanceof Error ? e.message : "Failed to close position");
+      } finally {
+        setCloseLoading(false);
+      }
     },
-    []
+    [refetch]
   );
 
   const handleAddMargin = useCallback((pos: EnrichedPosition) => {
@@ -87,8 +116,20 @@ export default function DashboardPage() {
   }, []);
 
   const handleTpSl = useCallback((pos: EnrichedPosition) => {
-    console.log("TP/SL:", pos.symbol, pos.side);
+    setTpslTarget(pos);
+    setTpslModalOpen(true);
   }, []);
+
+  const handleTpSlConfirm = useCallback(
+    async (position: EnrichedPosition, tpPrice: string | null, slPrice: string | null) => {
+      await setTpsl(position.symbol, position.side, {
+        tp_price: tpPrice ?? undefined,
+        sl_price: slPrice ?? undefined,
+      });
+      refetch();
+    },
+    [refetch]
+  );
 
   const vaultValue = rawResponse?.strategy_positions ? undefined : undefined;
   const pnlIsPositive = totalUnrealizedPnl >= 0;
@@ -124,9 +165,9 @@ export default function DashboardPage() {
           loading={loading}
         />
         <StatCard
-          label="WebSocket"
-          value={loading ? null : connected ? "Connected" : "Disconnected"}
-          accent={connected ? "green" : "red"}
+          label="Price Feed"
+          value={loading ? null : wsStatus === "connected" ? "Live" : wsStatus === "connecting" ? "Connecting" : "Offline"}
+          accent={wsStatus === "connected" ? "green" : wsStatus === "connecting" ? "yellow" : "red"}
           loading={loading}
         />
       </div>
@@ -223,11 +264,24 @@ export default function DashboardPage() {
       <ClosePositionModal
         position={closeTarget}
         open={closeModalOpen}
+        loading={closeLoading}
+        error={closeError}
         onClose={() => {
           setCloseModalOpen(false);
           setCloseTarget(null);
+          setCloseError(null);
         }}
         onConfirm={handleCloseConfirm}
+      />
+
+      <TPSLModal
+        position={tpslTarget}
+        open={tpslModalOpen}
+        onClose={() => {
+          setTpslModalOpen(false);
+          setTpslTarget(null);
+        }}
+        onConfirm={handleTpSlConfirm}
       />
     </div>
   );

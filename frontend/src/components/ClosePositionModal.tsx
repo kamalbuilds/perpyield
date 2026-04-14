@@ -7,6 +7,8 @@ import type { EnrichedPosition } from "@/hooks/usePositions";
 interface ClosePositionModalProps {
   position: EnrichedPosition | null;
   open: boolean;
+  loading?: boolean;
+  error?: string | null;
   onClose: () => void;
   onConfirm: (position: EnrichedPosition, closePercent: number, orderType: "market" | "limit", limitPrice?: number) => void;
 }
@@ -14,27 +16,21 @@ interface ClosePositionModalProps {
 export default function ClosePositionModal({
   position,
   open,
+  loading,
+  error,
   onClose,
   onConfirm,
 }: ClosePositionModalProps) {
   const [closePercent, setClosePercent] = useState(100);
   const [orderType, setOrderType] = useState<"market" | "limit">("market");
   const [limitPrice, setLimitPrice] = useState("");
-  const [confirming, setConfirming] = useState(false);
+  const [confirming] = useState(false);
 
   const handleConfirm = useCallback(() => {
-    if (!position) return;
-    setConfirming(true);
+    if (!position || loading) return;
     const lp = orderType === "limit" && limitPrice ? parseFloat(limitPrice) : undefined;
     onConfirm(position, closePercent, orderType, lp);
-    setTimeout(() => {
-      setConfirming(false);
-      setClosePercent(100);
-      setOrderType("market");
-      setLimitPrice("");
-      onClose();
-    }, 500);
-  }, [position, closePercent, orderType, limitPrice, onConfirm, onClose]);
+  }, [position, closePercent, orderType, limitPrice, loading, onConfirm]);
 
   if (!position) return null;
 
@@ -180,6 +176,12 @@ export default function ClosePositionModal({
               </div>
             </div>
 
+            {error && (
+              <div className="p-3 rounded-lg bg-accent-red/10 border border-accent-red/30 mb-4">
+                <p className="text-xs text-accent-red">{error}</p>
+              </div>
+            )}
+
             <div className="flex gap-3">
               <button
                 onClick={onClose}
@@ -189,14 +191,14 @@ export default function ClosePositionModal({
               </button>
               <button
                 onClick={handleConfirm}
-                disabled={confirming}
+                disabled={loading}
                 className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  confirming
+                  loading
                     ? "bg-accent-red/20 text-accent-red/50 cursor-not-allowed"
                     : "bg-accent-red/15 text-accent-red border border-accent-red/30 hover:bg-accent-red/25"
                 }`}
               >
-                {confirming ? "Closing..." : `Close ${closePercent}%`}
+                {loading ? "Closing..." : `Close ${closePercent}%`}
               </button>
             </div>
           </motion.div>

@@ -46,9 +46,47 @@ class TPSLRequest(BaseModel):
     stop_loss: Optional[dict] = None
 
 
+class ClosePositionRequest(BaseModel):
+    symbol: str
+    side: str
+    amount: str
+    close_percent: int = 100
+    order_type: str = "market"
+    limit_price: Optional[str] = None
+    slippage_percent: str = "0.5"
+
+
 class LeverageRequest(BaseModel):
     symbol: str
     leverage: int
+
+
+@router.post("/close")
+async def close_position(req: ClosePositionRequest):
+    try:
+        client = _get_client()
+        if client is None:
+            raise HTTPException(status_code=503, detail="Pacifica client not configured")
+        close_side = "sell" if req.side.lower() == "long" else "buy"
+        if req.order_type == "limit" and req.limit_price:
+            result = await client.create_limit_order(
+                symbol=req.symbol.upper(),
+                side=close_side,
+                price=req.limit_price,
+                amount=req.amount,
+                reduce_only=True,
+            )
+        else:
+            result = await client.create_market_order(
+                symbol=req.symbol.upper(),
+                side=close_side,
+                amount=req.amount,
+                reduce_only=True,
+                slippage_percent=req.slippage_percent,
+            )
+        return {"status": "ok", "order": result}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.post("/market")

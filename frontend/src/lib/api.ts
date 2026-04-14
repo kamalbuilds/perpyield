@@ -133,6 +133,84 @@ export async function fetchPositions(): Promise<PositionsResponse> {
   return apiFetch<PositionsResponse>("/api/positions");
 }
 
+export interface AddMarginResponse {
+  status: string;
+  symbol: string;
+  side: string;
+  amount_added: string;
+  pacific_response: Record<string, unknown>;
+}
+
+export async function addMargin(
+  symbol: string,
+  side: string,
+  amount: string,
+  isolated: boolean = false
+): Promise<AddMarginResponse> {
+  return apiFetch<AddMarginResponse>("/api/positions/margin", {
+    method: "POST",
+    body: JSON.stringify({ symbol, side, amount, isolated }),
+  });
+}
+
+export interface ClosePositionResult {
+  status: string;
+  order: Record<string, unknown>;
+}
+
+export async function closePosition(
+  symbol: string,
+  side: string,
+  amount: string,
+  options?: {
+    close_percent?: number;
+    order_type?: "market" | "limit";
+    limit_price?: string;
+    slippage_percent?: string;
+  }
+): Promise<ClosePositionResult> {
+  return apiFetch<ClosePositionResult>("/api/v1/orders/close", {
+    method: "POST",
+    body: JSON.stringify({
+      symbol,
+      side,
+      amount,
+      close_percent: options?.close_percent ?? 100,
+      order_type: options?.order_type ?? "market",
+      limit_price: options?.limit_price,
+      slippage_percent: options?.slippage_percent ?? "0.5",
+    }),
+  });
+}
+
+export interface TPSLResult {
+  status?: string;
+  [key: string]: unknown;
+}
+
+export async function setTpsl(
+  symbol: string,
+  side: string,
+  options?: {
+    take_profit?: { stop_price: string; limit_price?: string; amount?: string };
+    stop_loss?: { stop_price: string; limit_price?: string; amount?: string };
+    tp_price?: string;
+    sl_price?: string;
+  }
+): Promise<TPSLResult> {
+  return apiFetch<TPSLResult>("/api/positions/tpsl", {
+    method: "POST",
+    body: JSON.stringify({
+      symbol,
+      side,
+      take_profit: options?.take_profit,
+      stop_loss: options?.stop_loss,
+      tp_price: options?.tp_price,
+      sl_price: options?.sl_price,
+    }),
+  });
+}
+
 // ---- Backtest ----
 
 export interface BacktestResult {
