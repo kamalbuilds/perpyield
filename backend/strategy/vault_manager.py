@@ -1,7 +1,7 @@
 import json
 import time
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields as dataclass_fields
 from pathlib import Path
 from typing import Optional, Dict, Type
 
@@ -244,6 +244,9 @@ class VaultManager:
 
         # Load saved config or use defaults
         config_kwargs = self.state.strategy_config if self.state.strategy_config else {}
+        if config_kwargs:
+            valid_keys = {f.name for f in dataclass_fields(config_class)}
+            config_kwargs = {k: v for k, v in config_kwargs.items() if k in valid_keys}
         config = config_class(**config_kwargs) if config_kwargs else config_class()
 
         logger.info(f"Initialized {strategy_id} strategy for vault {self.vault_id}")

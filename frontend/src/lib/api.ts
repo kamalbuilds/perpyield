@@ -305,6 +305,7 @@ export interface StrategyBacktestRequest {
   strategy_id: string;
   symbol: string;
   days: number;
+  initial_capital?: number;
   config?: Record<string, unknown>;
 }
 

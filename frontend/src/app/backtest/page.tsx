@@ -22,6 +22,7 @@ function BacktestPageContent() {
         strategy_id: values.strategyId,
         symbol: values.symbol,
         days: values.days,
+        initial_capital: values.initialCapital,
         config: Object.keys(values.config).length > 0 ? values.config : undefined,
       });
     } catch {}

@@ -3,6 +3,7 @@ import asyncio
 import os
 import time
 import logging
+from dataclasses import fields as dataclass_fields
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
@@ -37,6 +38,7 @@ class BacktestRequest(BaseModel):
     strategy_id: str
     symbol: str
     days: int = 30
+    initial_capital: float = 10_000.0
     config: Optional[dict] = None
 
 
@@ -65,6 +67,12 @@ def _get_vault_manager():
     return get_vault_manager()
 
 
+def _filter_config(config_class, config: dict) -> dict:
+    """Filter config dict to only include keys accepted by the dataclass."""
+    valid_keys = {f.name for f in dataclass_fields(config_class)}
+    return {k: v for k, v in config.items() if k in valid_keys}
+
+
 def _get_strategy_instance(strategy_id: str, config: Optional[dict] = None):
     """Get or create a strategy instance for backtesting."""
     cache_key = f"{strategy_id}_{hash(str(config))}"
@@ -76,7 +84,8 @@ def _get_strategy_instance(strategy_id: str, config: Optional[dict] = None):
         if strategy_class is None:
             raise ValueError(f"Unknown strategy: {strategy_id}")
 
-        cfg = config_class(**config) if config else config_class()
+        filtered = _filter_config(config_class, config) if config else {}
+        cfg = config_class(**filtered) if filtered else config_class()
         _strategy_instances[cache_key] = strategy_class(client, cfg)
 
     return _strategy_instances[cache_key]
@@ -113,6 +122,13 @@ async def get_strategy_info(strategy_id: str):
         raise HTTPException(status_code=404, detail=f"Strategy {strategy_id} not found")
 
     info = STRATEGY_REGISTRY[strategy_id]
+    config_class = info.get("config_class")
+    config_defaults = {}
+    if config_class:
+        config_defaults = {
+            f.name: getattr(config_class(), f.name)
+            for f in dataclass_fields(config_class)
+        }
     return {
         "id": strategy_id,
         "name": info["name"],
@@ -120,34 +136,7 @@ async def get_strategy_info(strategy_id: str):
         "indicators": info["indicators"],
         "risk_level": info["risk_level"],
         "expected_apy": info["expected_apy"],
-        "config_defaults": {
-            "delta_neutral": {
-                "min_funding_rate": 0.0001,
-                "min_apy": 8.0,
-                "max_leverage": 3.0,
-                "max_position_pct": 0.25,
-            },
-            "momentum_swing": {
-                "ema_fast_period": 9,
-                "ema_slow_period": 21,
-                "rsi_period": 14,
-                "momentum_threshold": 60.0,
-                "max_positions": 5,
-            },
-            "mean_reversion": {
-                "bb_period": 20,
-                "bb_std_dev": 2.0,
-                "rsi_overbought": 70.0,
-                "rsi_oversold": 30.0,
-                "max_positions": 4,
-            },
-            "volatility_breakout": {
-                "atr_period": 14,
-                "atr_multiplier_entry": 0.5,
-                "atr_multiplier_stop": 1.5,
-                "max_positions": 4,
-            },
-        }.get(strategy_id, {}),
+        "config_defaults": config_defaults,
     }
 
 
@@ -155,17 +144,28 @@ async def get_strategy_info(strategy_id: str):
 async def backtest_strategy(req: BacktestRequest):
     """Run a backtest for a specific strategy."""
     try:
-        # Use the vault manager's backtester for consistency
         from strategy.backtester import Backtester, BacktestConfig
 
         client = _get_client()
-        bt = Backtester(client)
 
-        # Run simulation
+        bt_config = BacktestConfig(initial_capital=req.initial_capital)
+
+        if req.config:
+            strategy_class, config_class = get_strategy_class(req.strategy_id)
+            if config_class:
+                filtered = _filter_config(config_class, req.config)
+                strategy_cfg = config_class(**filtered)
+
+                if req.strategy_id == "delta_neutral" and hasattr(strategy_cfg, "min_funding_rate"):
+                    bt_config.min_funding_rate = strategy_cfg.min_funding_rate
+                if hasattr(strategy_cfg, "max_positions"):
+                    bt_config.max_positions = strategy_cfg.max_positions
+                if hasattr(strategy_cfg, "max_leverage"):
+                    bt_config.leverage = strategy_cfg.max_leverage
+
+        bt = Backtester(client, bt_config)
+
         result = await bt.simulate(req.symbol, req.days)
-
-        # Get strategy-specific insights
-        strategy = _get_strategy_instance(req.strategy_id, req.config)
 
         return {
             "strategy_id": req.strategy_id,
@@ -187,6 +187,7 @@ async def backtest_strategy(req: BacktestRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
+        logger.error(f"Backtest error for {req.strategy_id}/{req.symbol}: {exc}", exc_info=True)
         raise HTTPException(status_code=502, detail=str(exc))
 
 
