@@ -88,6 +88,38 @@ The system continuously monitors exposure drift, funding conditions, and orderbo
 - **Exchange**: Pacifica perpetual futures (Solana), REST + WebSocket APIs
 - **Signing**: Ed25519 via solders for authenticated order execution
 
+## MCP Configuration
+
+This project includes MCP (Model Context Protocol) integration with Pacifica's documentation:
+
+```json
+{
+  "mcpServers": {
+    "pacifica-docs": {
+      "url": "https://pacifica.gitbook.io/docs/~gitbook/mcp"
+    }
+  }
+}
+```
+
+### Configuration Files
+
+- **`opencode.json`** - OpenCode configuration with MCP server and agent settings
+- **`.cursor/mcp.json`** - Cursor-specific MCP configuration
+
+### Setup by Tool
+
+- **OpenCode**: The `opencode.json` file in the project root contains the MCP configuration
+- **Cursor**: The `.cursor/mcp.json` file is configured. Cursor will automatically detect it.
+- **Claude Desktop**: Add the MCP server to your Claude Desktop configuration at `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+### What the Pacifica MCP Provides
+
+- API documentation and endpoints
+- Trading specifications and contract details
+- Integration guides and examples
+- Real-time documentation queries
+
 ## Quick Start
 
 ### Prerequisites

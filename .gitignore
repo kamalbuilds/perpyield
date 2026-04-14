@@ -6,3 +6,7 @@ venv/
 .env
 .DS_Store
 vault_state.json
+.gstack/
+SUBMISSION.md
+DEPLOYMENT.md
+DEMO_SCRIPT.md
