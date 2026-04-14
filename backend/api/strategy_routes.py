@@ -281,12 +281,14 @@ async def run_strategy_cycle():
 
 @router.get("/api/positions")
 async def get_positions():
+    """Get live positions from Pacifica and strategy positions."""
     try:
         client = _get_client()
         raw_positions = await client.get_positions()
         vm = _get_vault_manager()
         
         # Map Pacifica positions to frontend format
+        # v2.0.1 - Fixed field mapping for frontend compatibility
         live_positions = []
         for p in raw_positions:
             # Convert "bid" -> "long", "ask" -> "short"
