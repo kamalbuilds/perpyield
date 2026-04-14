@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import NotificationBell from "@/components/NotificationBell";
 
 const navItems = [
@@ -47,9 +48,7 @@ export default function Header() {
         </div>
         <div className="flex items-center gap-3">
           <NotificationBell />
-          <button className="px-4 py-2 rounded-lg text-sm font-medium border border-card-border bg-white/5 text-muted hover:text-foreground hover:border-accent-green/30 transition-colors">
-            Connect Wallet
-          </button>
+          <WalletMultiButton className="!bg-white/5 !border !border-card-border !text-muted hover:!text-foreground hover:!border-accent-green/30 !rounded-lg !text-sm !font-medium !h-9 !px-4 !py-2" />
         </div>
       </div>
     </header>

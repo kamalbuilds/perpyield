@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
+import WalletProvider from "@/components/WalletProvider";
 import { PriceProvider } from "@/context/PriceContext";
 import { NotificationProvider } from "@/context/NotificationContext";
 import NotificationToast from "@/components/NotificationToast";
@@ -26,13 +27,15 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
       <body className="min-h-full bg-background text-foreground">
-        <NotificationProvider>
-          <PriceProvider>
-            <Header />
-            <NotificationToast />
-            <main className="max-w-[1400px] mx-auto px-6 py-6">{children}</main>
-          </PriceProvider>
-        </NotificationProvider>
+        <WalletProvider>
+          <NotificationProvider>
+            <PriceProvider>
+              <Header />
+              <NotificationToast />
+              <main className="max-w-[1400px] mx-auto px-6 py-6">{children}</main>
+            </PriceProvider>
+          </NotificationProvider>
+        </WalletProvider>
       </body>
     </html>
   );
