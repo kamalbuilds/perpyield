@@ -31,6 +31,9 @@ from api.lake_routes import router as lake_router
 from api.strategy_routes import router as strategy_router
 from api.vault_routes import router as vault_router
 from api.backtest_routes import router as backtest_router
+from api.leaderboard_routes import router as leaderboard_router
+from api.social_routes import router as social_router
+from ai_advisor.api_routes import router as ai_router
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +136,9 @@ app.include_router(lake_router, prefix="/api/v1")
 app.include_router(strategy_router)
 app.include_router(vault_router)
 app.include_router(backtest_router)
+app.include_router(leaderboard_router)
+app.include_router(social_router)
+app.include_router(ai_router)
 
 
 @app.get("/api/health")

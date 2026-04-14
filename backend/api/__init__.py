@@ -5,8 +5,11 @@ from .lake_routes import router as lake_router
 from .strategy_routes import router as strategy_router
 from .vault_routes import router as vault_router
 from .backtest_routes import router as backtest_router
+from .leaderboard_routes import router as leaderboard_router
+from .social_routes import router as social_router
 
 __all__ = [
     "market_router", "account_router", "order_router", "lake_router",
     "strategy_router", "vault_router", "backtest_router",
+    "leaderboard_router", "social_router",
 ]
