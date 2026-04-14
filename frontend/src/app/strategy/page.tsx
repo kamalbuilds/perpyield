@@ -20,7 +20,9 @@ function Skeleton({ className }: { className?: string }) {
 export default function StrategyPage() {
   const { depositSuccess, depositFailed, withdrawalSuccess, withdrawalFailed, strategySwitched, apiError, notify } = useNotifications();
   const [status, setStatus] = useState<StrategyStatus | null>(null);
+  const [strategyName, setStrategyName] = useState<string>("");
   const [deltaSummary, setDeltaSummary] = useState<DeltaSummary | null>(null);
+  const [deltaNote, setDeltaNote] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -29,7 +31,6 @@ export default function StrategyPage() {
     text: string;
   } | null>(null);
 
-  // Deposit/Withdraw state
   const [depositAmount, setDepositAmount] = useState("");
   const [withdrawShares, setWithdrawShares] = useState("");
   const [depositLoading, setDepositLoading] = useState(false);
@@ -41,16 +42,19 @@ export default function StrategyPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [statusData, deltaData] = await Promise.allSettled([
+      const [statusResult, deltaResult] = await Promise.allSettled([
         fetchStrategyStatus(),
         fetchDeltaSummary(),
       ]);
-      if (statusData.status === "fulfilled") {
-        setStatus(statusData.value);
-        setRunning(statusData.value.active_positions > 0);
+      if (statusResult.status === "fulfilled") {
+        const vs = statusResult.value.vault_strategy;
+        setStatus(vs);
+        setRunning(vs.active_positions > 0);
+        setStrategyName(statusResult.value.strategy_name || vs.strategy_name || "");
       }
-      if (deltaData.status === "fulfilled") {
-        setDeltaSummary(deltaData.value);
+      if (deltaResult.status === "fulfilled") {
+        setDeltaSummary(deltaResult.value);
+        setDeltaNote(deltaResult.value.note ?? deltaResult.value.delta_tracking ?? null);
       }
     } catch {
       // Silently handle errors on status poll
@@ -287,11 +291,15 @@ export default function StrategyPage() {
             <Skeleton className="h-10 w-full" />
             <Skeleton className="h-10 w-full" />
           </div>
+        ) : deltaNote ? (
+          <div className="py-6 text-center text-sm text-muted">
+            {deltaNote}
+          </div>
         ) : deltaSummary === null ? (
           <div className="py-6 text-center text-sm text-muted">
             No delta data available. Start the strategy to see delta exposure.
           </div>
-        ) : deltaSummary.positions.length === 0 ? (
+        ) : !deltaSummary.positions || deltaSummary.positions.length === 0 ? (
           <div className="py-6 text-center text-sm text-muted">
             No positions tracked. Delta is neutral.
           </div>
@@ -304,8 +312,8 @@ export default function StrategyPage() {
               />
               <DeltaStatCard
                 label="Needing Rebalance"
-                value={`${deltaSummary.positions_needing_rebalance}`}
-                highlight={deltaSummary.positions_needing_rebalance > 0}
+                value={`${deltaSummary.positions_needing_rebalance ?? 0}`}
+                highlight={(deltaSummary.positions_needing_rebalance ?? 0) > 0}
               />
               <DeltaStatCard
                 label="Total Rebalances"

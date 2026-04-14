@@ -162,10 +162,19 @@ export interface StrategyStatus {
   active_positions: number;
   positions: PositionEntry[];
   total_funding_earned: number;
+  strategy_id?: string;
+  strategy_name?: string;
+  config?: Record<string, unknown>;
 }
 
-export async function fetchStrategyStatus(): Promise<StrategyStatus> {
-  return apiFetch<StrategyStatus>("/api/strategy/status");
+export interface StrategyStatusResponse {
+  vault_strategy: StrategyStatus;
+  current_strategy_id: string;
+  strategy_name: string;
+}
+
+export async function fetchStrategyStatus(): Promise<StrategyStatusResponse> {
+  return apiFetch<StrategyStatusResponse>("/api/strategy/status");
 }
 
 export async function startStrategy(): Promise<{ status: string; timestamp?: number }> {
@@ -188,14 +197,29 @@ export interface DeltaPosition {
 }
 
 export interface DeltaSummary {
-  positions_tracked: number;
-  positions_needing_rebalance: number;
-  total_rebalances_executed: number;
+  positions_tracked?: number;
+  positions_needing_rebalance?: number;
+  total_rebalances_executed?: number;
   positions: DeltaPosition[];
+  delta_tracking?: string;
+  note?: string;
+  strategy_id?: string;
 }
 
 export async function fetchDeltaSummary(): Promise<DeltaSummary> {
-  return apiFetch<DeltaSummary>("/api/delta/summary");
+  const raw = await apiFetch<Record<string, unknown>>("/api/delta/summary");
+  if (raw.delta_tracking === "not_applicable" || !Array.isArray(raw.positions)) {
+    return {
+      positions_tracked: 0,
+      positions_needing_rebalance: 0,
+      total_rebalances_executed: 0,
+      positions: [],
+      delta_tracking: (raw.delta_tracking as string) ?? undefined,
+      note: (raw.note as string) ?? undefined,
+      strategy_id: (raw.strategy_id as string) ?? undefined,
+    };
+  }
+  return raw as unknown as DeltaSummary;
 }
 
 // ---- Strategy Marketplace ----
